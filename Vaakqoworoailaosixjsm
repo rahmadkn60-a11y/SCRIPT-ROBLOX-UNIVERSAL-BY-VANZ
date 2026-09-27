@@ -1,0 +1,1107 @@
+-- vanz
+do
+    print("[VANZ] BLOK 1 start")
+    local ok, err = pcall(function()
+        _G.vanz = _G.vanz or {}
+        local V = _G.vanz
+
+        if V.ScreenGui and V.ScreenGui.Parent then
+            pcall(function() V.ScreenGui:Destroy() end)
+        end
+        -- force destroy everything called VanzAudit
+        pcall(function()
+            local cg = game:GetService("CoreGui")
+            for _, c in ipairs(cg:GetChildren()) do
+                if c.Name == "VanzAudit" then c:Destroy() end
+            end
+        end)
+        pcall(function()
+            local pg = game.Players.LocalPlayer:FindFirstChild("PlayerGui")
+            if pg then
+                for _, c in ipairs(pg:GetChildren()) do
+                    if c.Name == "VanzAudit" then c:Destroy() end
+                end
+            end
+        end)
+
+        V.ScreenGui = nil
+        V.Main = nil
+        V.Logo = nil
+        V.MinBtn = nil
+        V.LogScroll = nil
+        V.ReportBox = nil
+        V.StageLabels = nil
+
+        V.dumperEnabled    = false
+        V.loggerEnabled    = false
+        V.inspectorEnabled = false
+        V.clientEnabled    = false
+        V.testEnabled      = false
+        V.autoScanRunning  = false
+        V.autoScanCancel   = false
+
+        V.remotes     = {}
+        V.log         = {}
+        V.contracts   = {}
+        V.clientCode  = {}
+        V.testResults = {}
+        V.report      = ""
+
+        V.stages = {
+            {name = "Remote Dumper", status = "idle"},
+            {name = "Remote Logger", status = "idle"},
+            {name = "Argument Inspector", status = "idle"},
+            {name = "Client Inspector", status = "idle"},
+            {name = "Test Harness", status = "idle"},
+            {name = "Report Generator", status = "idle"},
+        }
+
+        local function pushLog(msg)
+            local entry = {text = os.date("%H:%M:%S ") .. tostring(msg)}
+            table.insert(V.log, entry)
+            if #V.log > 500 then table.remove(V.log, 1) end
+            if V.LogScroll and V.LogScroll.Parent then
+                pcall(function()
+                    local lbl = Instance.new("TextLabel")
+                    lbl.Size = UDim2.new(1, -8, 0, 0)
+                    lbl.AutomaticSize = Enum.AutomaticSize.Y
+                    lbl.BackgroundTransparency = 1
+                    lbl.Text = entry.text
+                    lbl.TextColor3 = Color3.fromRGB(200, 200, 220)
+                    lbl.Font = Enum.Font.Code
+                    lbl.TextSize = 9
+                    lbl.TextWrapped = true
+                    lbl.TextXAlignment = Enum.TextXAlignment.Left
+                    lbl.TextYAlignment = Enum.TextYAlignment.Top
+                    lbl.Parent = V.LogScroll
+                end)
+            end
+        end
+        V.pushLog = pushLog
+
+        local function setStage(idx, status)
+            if not V.stages[idx] then return end
+            V.stages[idx].status = status
+            local lbl = V.StageLabels and V.StageLabels[idx]
+            if lbl then
+                lbl.Text = string.format("[%d] %s: %s", idx, V.stages[idx].name, status)
+                if status == "idle" then
+                    lbl.TextColor3 = Color3.fromRGB(150, 150, 170)
+                elseif status == "running" then
+                    lbl.TextColor3 = Color3.fromRGB(255, 200, 100)
+                elseif status == "done" then
+                    lbl.TextColor3 = Color3.fromRGB(120, 220, 120)
+                elseif status == "error" then
+                    lbl.TextColor3 = Color3.fromRGB(240, 100, 100)
+                end
+            end
+        end
+        V.setStage = setStage
+
+        local CoreGui = game:GetService("CoreGui")
+        local W = 260
+        local HScale = 0.85
+
+        local sg = Instance.new("ScreenGui")
+        sg.Name = "VanzAudit"
+        sg.ResetOnSpawn = false
+        sg.IgnoreGuiInset = true
+        pcall(function() sg.Parent = CoreGui end)
+        if not sg.Parent then
+            sg.Parent = game.Players.LocalPlayer:WaitForChild("PlayerGui")
+        end
+        V.ScreenGui = sg
+
+        local main = Instance.new("Frame")
+        main.Name = "Main"
+        main.Size = UDim2.new(0, W, HScale, 0)
+        main.Position = UDim2.new(0, 10, 0.5, 0)
+        main.AnchorPoint = Vector2.new(0, 0.5)
+        main.BackgroundColor3 = Color3.fromRGB(16, 16, 22)
+        main.BorderSizePixel = 0
+        main.Active = true
+        main.Draggable = true
+        main.Parent = sg
+        V.Main = main
+        Instance.new("UICorner", main).CornerRadius = UDim.new(0, 8)
+        local stroke = Instance.new("UIStroke", main)
+        stroke.Color = Color3.fromRGB(55, 55, 75)
+        stroke.Thickness = 1
+
+        local tb = Instance.new("Frame")
+        tb.Size = UDim2.new(1, 0, 0, 28)
+        tb.BackgroundColor3 = Color3.fromRGB(26, 26, 36)
+        tb.BorderSizePixel = 0
+        tb.Parent = main
+        Instance.new("UICorner", tb).CornerRadius = UDim.new(0, 8)
+        local tbfix = Instance.new("Frame")
+        tbfix.Size = UDim2.new(1, 0, 0, 10)
+        tbfix.Position = UDim2.new(0, 0, 1, -10)
+        tbfix.BackgroundColor3 = Color3.fromRGB(26, 26, 36)
+        tbfix.BorderSizePixel = 0
+        tbfix.Parent = tb
+
+        local title = Instance.new("TextLabel")
+        title.Size = UDim2.new(1, -50, 1, 0)
+        title.Position = UDim2.new(0, 8, 0, 0)
+        title.BackgroundTransparency = 1
+        title.Text = "VANZ AUDIT"
+        title.TextColor3 = Color3.fromRGB(230, 230, 245)
+        title.Font = Enum.Font.GothamBold
+        title.TextSize = 11
+        title.TextXAlignment = Enum.TextXAlignment.Left
+        title.Parent = tb
+
+        local minBtn = Instance.new("TextButton")
+        minBtn.Size = UDim2.new(0, 22, 0, 20)
+        minBtn.Position = UDim2.new(1, -26, 0, 4)
+        minBtn.BackgroundColor3 = Color3.fromRGB(50, 50, 65)
+        minBtn.Text = "_"
+        minBtn.TextColor3 = Color3.fromRGB(230, 230, 245)
+        minBtn.Font = Enum.Font.GothamBold
+        minBtn.TextSize = 14
+        minBtn.BorderSizePixel = 0
+        minBtn.Parent = tb
+        Instance.new("UICorner", minBtn).CornerRadius = UDim.new(0, 4)
+        V.MinBtn = minBtn
+
+        -- LOGO (dibuat di BLOK 1 biar minimize tetap works)
+        local Logo = Instance.new("TextButton")
+        Logo.Name = "Logo"
+        Logo.Size = UDim2.new(0, 46, 0, 46)
+        Logo.Position = UDim2.new(0, 20, 0.5, -23)
+        Logo.BackgroundColor3 = Color3.fromRGB(30, 30, 42)
+        Logo.Text = "V"
+        Logo.TextColor3 = Color3.fromRGB(150, 130, 255)
+        Logo.Font = Enum.Font.GothamBold
+        Logo.TextSize = 20
+        Logo.BorderSizePixel = 0
+        Logo.Visible = false
+        Logo.Active = true
+        Logo.Parent = sg
+        V.Logo = Logo
+        Instance.new("UICorner", Logo).CornerRadius = UDim.new(1, 0)
+        local ls = Instance.new("UIStroke", Logo)
+        ls.Color = Color3.fromRGB(150, 130, 255)
+        ls.Thickness = 2
+
+        Logo.InputBegan:Connect(function(input)
+            local isClick = input.UserInputType == Enum.UserInputType.MouseButton1
+                or input.UserInputType == Enum.UserInputType.Touch
+            if not isClick then return end
+            local startInput = input.Position
+            local startPos = Logo.Position
+            local moved = false
+            local conn
+            conn = input.Changed:Connect(function()
+                if input.UserInputState == Enum.UserInputState.End then
+                    if conn then conn:Disconnect() end
+                    if not moved then
+                        V.Main.Visible = true
+                        Logo.Visible = false
+                    end
+                    return
+                end
+                local d = input.Position - startInput
+                if d.Magnitude > 4 then moved = true end
+                if moved then
+                    Logo.Position = UDim2.new(
+                        startPos.X.Scale, startPos.X.Offset + d.X,
+                        startPos.Y.Scale, startPos.Y.Offset + d.Y
+                    )
+                end
+            end)
+        end)
+
+        minBtn.MouseButton1Click:Connect(function()
+            V.Main.Visible = false
+            Logo.Visible = true
+        end)
+
+        -- TAB BAR
+        local tabBar = Instance.new("Frame")
+        tabBar.Position = UDim2.new(0, 6, 0, 34)
+        tabBar.Size = UDim2.new(1, -12, 0, 22)
+        tabBar.BackgroundTransparency = 1
+        tabBar.Parent = main
+        local tbl = Instance.new("UIListLayout", tabBar)
+        tbl.FillDirection = Enum.FillDirection.Horizontal
+        tbl.Padding = UDim.new(0, 3)
+        tbl.SortOrder = Enum.SortOrder.LayoutOrder
+
+        local content = Instance.new("Frame")
+        content.Position = UDim2.new(0, 6, 0, 60)
+        content.Size = UDim2.new(1, -12, 1, -66)
+        content.BackgroundTransparency = 1
+        content.Parent = main
+
+        local function newScroll(parent)
+            local s = Instance.new("ScrollingFrame")
+            s.Size = UDim2.new(1, 0, 1, 0)
+            s.BackgroundTransparency = 1
+            s.BorderSizePixel = 0
+            s.ScrollBarThickness = 4
+            s.ScrollBarImageColor3 = Color3.fromRGB(80, 80, 100)
+            s.CanvasSize = UDim2.new(0, 0, 0, 0)
+            s.AutomaticCanvasSize = Enum.AutomaticSize.Y
+            s.Visible = false
+            s.Parent = parent
+            local lay = Instance.new("UIListLayout", s)
+            lay.Padding = UDim.new(0, 3)
+            lay.SortOrder = Enum.SortOrder.LayoutOrder
+            return s
+        end
+
+        local mainTab = newScroll(content)
+        local logTab  = newScroll(content)
+        local repTab  = newScroll(content)
+        mainTab.Visible = true
+
+        local tabBtns = {}
+        local function makeTab(text, target)
+            local b = Instance.new("TextButton")
+            b.Size = UDim2.new(0, 80, 1, 0)
+            b.BackgroundColor3 = Color3.fromRGB(32, 32, 44)
+            b.Text = text
+            b.TextColor3 = Color3.fromRGB(180, 180, 200)
+            b.Font = Enum.Font.GothamBold
+            b.TextSize = 9
+            b.BorderSizePixel = 0
+            b.Parent = tabBar
+            Instance.new("UICorner", b).CornerRadius = UDim.new(0, 5)
+            table.insert(tabBtns, {b = b, t = target})
+            b.MouseButton1Click:Connect(function()
+                for _, x in ipairs(tabBtns) do
+                    x.t.Visible = (x.t == target)
+                    x.b.BackgroundColor3 = (x.t == target) and Color3.fromRGB(60, 50, 100) or Color3.fromRGB(32, 32, 44)
+                    x.b.TextColor3 = (x.t == target) and Color3.fromRGB(235, 235, 245) or Color3.fromRGB(180, 180, 200)
+                end
+            end)
+            return b
+        end
+
+        local btnMain = makeTab("MAIN", mainTab)
+        local btnLog  = makeTab("LOG", logTab)
+        local btnRep  = makeTab("REPORT", repTab)
+        btnMain.BackgroundColor3 = Color3.fromRGB(60, 50, 100)
+        btnMain.TextColor3 = Color3.fromRGB(235, 235, 245)
+
+        local function section(parent, text)
+            local lb = Instance.new("TextLabel")
+            lb.Size = UDim2.new(1, 0, 0, 18)
+            lb.BackgroundTransparency = 1
+            lb.Text = text
+            lb.TextColor3 = Color3.fromRGB(150, 130, 255)
+            lb.Font = Enum.Font.GothamBold
+            lb.TextSize = 10
+            lb.TextXAlignment = Enum.TextXAlignment.Left
+            lb.Parent = parent
+            return lb
+        end
+
+        local function toggle(parent, text, init, cb)
+            local row = Instance.new("Frame")
+            row.Size = UDim2.new(1, 0, 0, 22)
+            row.BackgroundColor3 = Color3.fromRGB(28, 28, 38)
+            row.BorderSizePixel = 0
+            row.Parent = parent
+            Instance.new("UICorner", row).CornerRadius = UDim.new(0, 5)
+            local lb = Instance.new("TextLabel")
+            lb.Size = UDim2.new(1, -50, 1, 0)
+            lb.Position = UDim2.new(0, 8, 0, 0)
+            lb.BackgroundTransparency = 1
+            lb.Text = text
+            lb.TextColor3 = Color3.fromRGB(220, 220, 235)
+            lb.Font = Enum.Font.GothamBold
+            lb.TextSize = 9
+            lb.TextXAlignment = Enum.TextXAlignment.Left
+            lb.Parent = row
+            local btn = Instance.new("TextButton")
+            btn.Size = UDim2.new(0, 38, 0, 16)
+            btn.Position = UDim2.new(1, -44, 0.5, -8)
+            btn.BackgroundColor3 = init and Color3.fromRGB(80, 200, 120) or Color3.fromRGB(60, 60, 70)
+            btn.Text = init and "ON" or "OFF"
+            btn.TextColor3 = Color3.fromRGB(255, 255, 255)
+            btn.Font = Enum.Font.GothamBold
+            btn.TextSize = 9
+            btn.BorderSizePixel = 0
+            btn.Parent = row
+            Instance.new("UICorner", btn).CornerRadius = UDim.new(1, 0)
+            btn.MouseButton1Click:Connect(function()
+                init = not init
+                btn.BackgroundColor3 = init and Color3.fromRGB(80, 200, 120) or Color3.fromRGB(60, 60, 70)
+                btn.Text = init and "ON" or "OFF"
+                if cb then pcall(cb, init) end
+            end)
+            return btn
+        end
+
+        local function button(parent, text, color, cb)
+            local b = Instance.new("TextButton")
+            b.Size = UDim2.new(1, 0, 0, 24)
+            b.BackgroundColor3 = color
+            b.Text = text
+            b.TextColor3 = Color3.fromRGB(255, 255, 255)
+            b.Font = Enum.Font.GothamBold
+            b.TextSize = 10
+            b.BorderSizePixel = 0
+            b.Parent = parent
+            Instance.new("UICorner", b).CornerRadius = UDim.new(0, 5)
+            b.MouseButton1Click:Connect(function()
+                pcall(function()
+                    if cb then cb() end
+                end)
+            end)
+            return b
+        end
+
+        section(mainTab, "AUTO")
+        toggle(mainTab, "AUTOMATIC VULN SCAN (1 klik)", false, function(s)
+            if s then
+                if V.runAutoScan then
+                    task.spawn(function()
+                        pcall(function() V:runAutoScan() end)
+                    end)
+                else
+                    V.pushLog("[!] Auto-scan belum siap, blok masih loading")
+                end
+            else
+                V.autoScanCancel = true
+                V.pushLog("[!] Cancel requested")
+            end
+        end)
+
+        section(mainTab, "STAGES")
+        V.StageLabels = {}
+        for i = 1, 6 do
+            local lb = Instance.new("TextLabel")
+            lb.Size = UDim2.new(1, 0, 0, 18)
+            lb.BackgroundColor3 = Color3.fromRGB(24, 24, 32)
+            lb.BorderSizePixel = 0
+            lb.Text = string.format("[%d] %s: idle", i, V.stages[i].name)
+            lb.TextColor3 = Color3.fromRGB(150, 150, 170)
+            lb.Font = Enum.Font.Code
+            lb.TextSize = 9
+            lb.TextXAlignment = Enum.TextXAlignment.Left
+            lb.Parent = mainTab
+            Instance.new("UICorner", lb).CornerRadius = UDim.new(0, 4)
+            local pad = Instance.new("UIPadding", lb)
+            pad.PaddingLeft = UDim.new(0, 6)
+            V.StageLabels[i] = lb
+        end
+
+        section(mainTab, "MODULES")
+        toggle(mainTab, "1. Remote Dumper", false, function(s) V.dumperEnabled = s end)
+        toggle(mainTab, "2. Remote Logger", false, function(s) V.loggerEnabled = s end)
+        toggle(mainTab, "3. Argument Inspector", false, function(s) V.inspectorEnabled = s end)
+        toggle(mainTab, "4. Client Inspector", false, function(s) V.clientEnabled = s end)
+        toggle(mainTab, "5. Test Harness", false, function(s) V.testEnabled = s end)
+
+        section(mainTab, "ACTIONS")
+        button(mainTab, "DUMP REMOTES", Color3.fromRGB(70, 130, 200), function()
+            if V.runDumper then V:runDumper() else V.pushLog("[!] runDumper belum siap") end
+        end)
+        button(mainTab, "ANALYZE LOG -> CONTRACTS", Color3.fromRGB(140, 110, 200), function()
+            if V.runInspector then V:runInspector() else V.pushLog("[!] runInspector belum siap") end
+        end)
+        button(mainTab, "SCAN CLIENT SCRIPTS", Color3.fromRGB(200, 130, 70), function()
+            if V.runClientInspector then V:runClientInspector() else V.pushLog("[!] runClientInspector belum siap") end
+        end)
+        button(mainTab, "RUN TESTS", Color3.fromRGB(200, 80, 80), function()
+            if V.runTests then V:runTests() else V.pushLog("[!] runTests belum siap") end
+        end)
+        button(mainTab, "GENERATE REPORT", Color3.fromRGB(80, 180, 120), function()
+            if V.buildReport then V:buildReport() else V.pushLog("[!] buildReport belum siap") end
+        end)
+
+        local logScroll = Instance.new("ScrollingFrame")
+        logScroll.Size = UDim2.new(1, 0, 1, -30)
+        logScroll.BackgroundColor3 = Color3.fromRGB(20, 20, 28)
+        logScroll.BorderSizePixel = 0
+        logScroll.ScrollBarThickness = 4
+        logScroll.CanvasSize = UDim2.new(0, 0, 0, 0)
+        logScroll.AutomaticCanvasSize = Enum.AutomaticSize.Y
+        logScroll.Parent = logTab
+        Instance.new("UICorner", logScroll).CornerRadius = UDim.new(0, 5)
+        local ll = Instance.new("UIListLayout", logScroll)
+        ll.Padding = UDim.new(0, 2)
+        ll.SortOrder = Enum.SortOrder.LayoutOrder
+        V.LogScroll = logScroll
+
+        button(logTab, "CLEAR LOG", Color3.fromRGB(120, 60, 60), function()
+            V.log = {}
+            for _, c in ipairs(logScroll:GetChildren()) do
+                if c:IsA("TextLabel") then c:Destroy() end
+            end
+        end)
+
+        local repBox = Instance.new("TextBox")
+        repBox.Size = UDim2.new(1, 0, 1, -30)
+        repBox.BackgroundColor3 = Color3.fromRGB(20, 20, 28)
+        repBox.TextColor3 = Color3.fromRGB(220, 220, 235)
+        repBox.Text = ""
+        repBox.PlaceholderText = "Belum ada report. Klik GENERATE REPORT."
+        repBox.Font = Enum.Font.Code
+        repBox.TextSize = 9
+        repBox.TextXAlignment = Enum.TextXAlignment.Left
+        repBox.TextYAlignment = Enum.TextYAlignment.Top
+        repBox.TextWrapped = true
+        repBox.Multiline = true
+        repBox.ClearTextOnFocus = false
+        repBox.BorderSizePixel = 0
+        repBox.Parent = repTab
+        Instance.new("UICorner", repBox).CornerRadius = UDim.new(0, 5)
+        local pad = Instance.new("UIPadding", repBox)
+        pad.PaddingTop = UDim.new(0, 6)
+        pad.PaddingLeft = UDim.new(0, 6)
+        pad.PaddingRight = UDim.new(0, 6)
+        pad.PaddingBottom = UDim.new(0, 6)
+        V.ReportBox = repBox
+
+        button(repTab, "COPY REPORT TO CLIPBOARD", Color3.fromRGB(0, 136, 204), function()
+            local txt = V.ReportBox.Text
+            if #txt > 0 then
+                pcall(function() if setclipboard then setclipboard(txt) end end)
+                V.pushLog("[+] Report copied (" .. #txt .. " char)")
+            end
+        end)
+
+        V.pushLog("[VANZ] GUI loaded")
+    end)
+    if not ok then
+        warn("[VANZ] BLOK 1 error: " .. tostring(err))
+    else
+        print("[VANZ] BLOK 1 done")
+    end
+end
+
+-- vanz
+do
+    print("[VANZ] BLOK 2 start")
+    local ok, err = pcall(function()
+        local V = _G.vanz
+        if not V then return end
+        -- BLOK 2 sudah di-absorb ke BLOK 1 (logo + minimize)
+        -- Blok ini cuma placeholder biar struktur tetap ada
+    end)
+    if not ok then warn("[VANZ] BLOK 2 error: " .. tostring(err)) end
+    print("[VANZ] BLOK 2 done")
+end
+
+-- vanz
+do
+    print("[VANZ] BLOK 3 start")
+    local ok, err = pcall(function()
+        local V = _G.vanz
+        if not V then return end
+
+        local function classifyRemote(obj)
+            if obj:IsA("RemoteEvent") or obj:IsA("UnreliableRemoteEvent") then
+                return "RemoteEvent", "FireServer"
+            elseif obj:IsA("RemoteFunction") then
+                return "RemoteFunction", "InvokeServer"
+            end
+            return nil, nil
+        end
+
+        function V:runDumper()
+            self.setStage(1, "running")
+            self.pushLog("[1] Dumping remotes...")
+            self.remotes = {}
+            local n = 0
+            for _, obj in ipairs(game:GetDescendants()) do
+                local cls, method = classifyRemote(obj)
+                if cls then
+                    local full = obj:GetFullName()
+                    self.remotes[full] = {
+                        name = obj.Name,
+                        className = cls,
+                        method = method,
+                        parent = obj.Parent and obj.Parent:GetFullName() or "?",
+                        instance = obj,
+                    }
+                    n = n + 1
+                end
+            end
+            self.pushLog("[1] DONE: " .. n .. " remotes")
+            self.setStage(1, "done")
+            return n
+        end
+
+        game.DescendantAdded:Connect(function(obj)
+            if not V.dumperEnabled and not V.autoScanRunning then return end
+            local cls = classifyRemote(obj)
+            if cls then
+                local full = obj:GetFullName()
+                if not V.remotes[full] then
+                    local method = (cls == "RemoteFunction") and "InvokeServer" or "FireServer"
+                    V.remotes[full] = {
+                        name = obj.Name,
+                        className = cls,
+                        method = method,
+                        parent = obj.Parent and obj.Parent:GetFullName() or "?",
+                        instance = obj,
+                    }
+                    V.pushLog("[1+] new: " .. full .. " [" .. cls .. "]")
+                end
+            end
+        end)
+    end)
+    if not ok then warn("[VANZ] BLOK 3 error: " .. tostring(err)) end
+    print("[VANZ] BLOK 3 done")
+end
+
+-- vanz
+do
+    print("[VANZ] BLOK 4 start")
+    local ok, err = pcall(function()
+        local V = _G.vanz
+        if not V then return end
+
+        local function fmtArg(a)
+            local t = typeof(a)
+            if t == "string" then
+                return '"' .. tostring(a):sub(1, 60) .. '"'
+            elseif t == "number" then
+                return tostring(a)
+            elseif t == "boolean" then
+                return tostring(a)
+            elseif t == "Instance" then
+                local ok2, n = pcall(function() return a:GetFullName() end)
+                return ok2 and n or (a.Name or "Instance")
+            elseif t == "table" then
+                return "[table]"
+            elseif t == "Vector3" then
+                return string.format("V3(%.1f,%.1f,%.1f)", a.X, a.Y, a.Z)
+            elseif t == "CFrame" then
+                local p = a.Position
+                return string.format("CF(%.1f,%.1f,%.1f)", p.X, p.Y, p.Z)
+            else
+                return tostring(a)
+            end
+        end
+
+        local function record(name, method, args)
+            local entry = {
+                remote = name,
+                method = method,
+                args = args,
+                time = os.time(),
+            }
+            table.insert(V.log, entry)
+            if #V.log > 1000 then table.remove(V.log, 1) end
+            if not V.pushLog then return end
+            V.pushLog("[2] " .. name .. " [" .. method .. "]")
+            for i = 1, #args do
+                V.pushLog("  " .. i .. " = " .. fmtArg(args[i]))
+            end
+        end
+
+        V.loggerHooked = false
+
+        if getrawmetatable and setreadonly and newcclosure and getnamecallmethod then
+            local ok2, err2 = pcall(function()
+                local mt = getrawmetatable(game)
+                if not mt then error("metatable nil") end
+                local oldNamecall = mt.__namecall
+                if not oldNamecall then error("__namecall nil") end
+                setreadonly(mt, false)
+                mt.__namecall = newcclosure(function(self, ...)
+                    local method = getnamecallmethod()
+                    if (method == "FireServer" or method == "InvokeServer")
+                        and (V.loggerEnabled or V.autoScanRunning) then
+                        local args = {...}
+                        if method == "InvokeServer" then
+                            local result = oldNamecall(self, ...)
+                            pcall(function()
+                                local name = "?"
+                                pcall(function() name = self:GetFullName() end)
+                                record(name, method, args)
+                            end)
+                            return result
+                        else
+                            pcall(function()
+                                local name = "?"
+                                pcall(function() name = self:GetFullName() end)
+                                record(name, method, args)
+                            end)
+                        end
+                    end
+                    return oldNamecall(self, ...)
+                end)
+                setreadonly(mt, true)
+                V.loggerHooked = true
+            end)
+            if not ok2 then warn("[VANZ] raw hook fail: " .. tostring(err2)) end
+        end
+
+        if not V.loggerHooked and hookmetamethod and newcclosure and getnamecallmethod then
+            local ok2, err2 = pcall(function()
+                local ref = {old = nil}
+                local wrapped = newcclosure(function(self, ...)
+                    local method = getnamecallmethod()
+                    if (method == "FireServer" or method == "InvokeServer")
+                        and (V.loggerEnabled or V.autoScanRunning) then
+                        local args = {...}
+                        if ref.old then
+                            if method == "InvokeServer" then
+                                local result = ref.old(self, ...)
+                                pcall(function()
+                                    local name = "?"
+                                    pcall(function() name = self:GetFullName() end)
+                                    record(name, method, args)
+                                end)
+                                return result
+                            else
+                                pcall(function()
+                                    local name = "?"
+                                    pcall(function() name = self:GetFullName() end)
+                                    record(name, method, args)
+                                end)
+                            end
+                        end
+                    end
+                    if ref.old then return ref.old(self, ...) end
+                end)
+                ref.old = hookmetamethod(game, "__namecall", wrapped)
+                if ref.old then
+                    V.loggerHooked = true
+                else
+                    error("hookmetamethod return nil")
+                end
+            end)
+            if not ok2 then warn("[VANZ] hookmetamethod fail: " .. tostring(err2)) end
+        end
+
+        if not V.loggerHooked then
+            warn("[VANZ] Logger TIDAK ter-hook")
+        end
+    end)
+    if not ok then warn("[VANZ] BLOK 4 error: " .. tostring(err)) end
+    print("[VANZ] BLOK 4 done, hooked=" .. tostring(_G.vanz and _G.vanz.loggerHooked))
+end
+
+-- vanz
+do
+    print("[VANZ] BLOK 5 start")
+    local ok, err = pcall(function()
+        local V = _G.vanz
+        if not V then return end
+
+        function V:runInspector()
+            self.setStage(3, "running")
+            self.pushLog("[3] Analyzing log -> contracts...")
+            local contracts = {}
+            for _, entry in ipairs(self.log) do
+                if entry.remote and entry.method and entry.args then
+                    local key = entry.remote
+                    if not contracts[key] then
+                        contracts[key] = {
+                            argTypes = {},
+                            samples = {},
+                            callCount = 0,
+                            method = entry.method,
+                        }
+                    end
+                    local c = contracts[key]
+                    c.callCount = c.callCount + 1
+                    for i, a in ipairs(entry.args) do
+                        c.argTypes[i] = c.argTypes[i] or {}
+                        local t = typeof(a)
+                        c.argTypes[i][t] = (c.argTypes[i][t] or 0) + 1
+                    end
+                    if #c.samples < 5 then
+                        local snap = {}
+                        for i, a in ipairs(entry.args) do
+                            snap[i] = {t = typeof(a), v = a}
+                        end
+                        table.insert(c.samples, snap)
+                    end
+                end
+            end
+            self.contracts = contracts
+            local n = 0
+            for _ in pairs(contracts) do n = n + 1 end
+            self.pushLog("[3] DONE: " .. n .. " remote contracts")
+            self.setStage(3, "done")
+            return n
+        end
+
+        task.spawn(function()
+            while V.ScreenGui and V.ScreenGui.Parent do
+                task.wait(5)
+                if V.inspectorEnabled and #V.log > 0 and V.runInspector then
+                    pcall(function() V:runInspector() end)
+                end
+            end
+        end)
+    end)
+    if not ok then warn("[VANZ] BLOK 5 error: " .. tostring(err)) end
+    print("[VANZ] BLOK 5 done")
+end
+
+-- vanz
+do
+    print("[VANZ] BLOK 6 start")
+    local ok, err = pcall(function()
+        local V = _G.vanz
+        if not V then return end
+
+        function V:runClientInspector()
+            self.setStage(4, "running")
+            self.pushLog("[4] Scanning client scripts...")
+            local found = {}
+            for _, obj in ipairs(game:GetDescendants()) do
+                local isClient = false
+                if obj:IsA("LocalScript") then
+                    isClient = true
+                elseif obj:IsA("ModuleScript") then
+                    local anc = obj:FindFirstAncestorWhichIsA("Player")
+                    if anc then isClient = true end
+                end
+                if isClient then
+                    local src = nil
+                    if getscriptbytecode then
+                        pcall(function() src = getscriptbytecode(obj) end)
+                    end
+                    if not src and obj.Source then
+                        pcall(function() src = obj.Source end)
+                    end
+                    table.insert(found, {
+                        path = obj:GetFullName(),
+                        className = obj.ClassName,
+                        source = src and ("(size: " .. tostring(#tostring(src)) .. ")") or "(not accessible)",
+                    })
+                end
+            end
+            self.clientCode = found
+            self.pushLog("[4] DONE: " .. #found .. " client scripts found")
+            for i = 1, math.min(#found, 10) do
+                self.pushLog("  - " .. found[i].path .. " [" .. found[i].className .. "]")
+            end
+            self.setStage(4, "done")
+            return #found
+        end
+    end)
+    if not ok then warn("[VANZ] BLOK 6 error: " .. tostring(err)) end
+    print("[VANZ] BLOK 6 done")
+end
+
+-- vanz
+do
+    print("[VANZ] BLOK 7 start")
+    local ok, err = pcall(function()
+        local V = _G.vanz
+        if not V then return end
+
+        local TESTS = {
+            {name = "type mismatch",      desc = "kirim tipe data berbeda dari kontrak normal"},
+            {name = "arg count variance", desc = "kirim jumlah arg berbeda dari normal"},
+            {name = "out of range",       desc = "kirim nilai di luar range normal"},
+            {name = "wrong instance",     desc = "kirim Instance reference yang tidak sesuai"},
+            {name = "invalid state",      desc = "panggil di luar state normal"},
+            {name = "rapid repeat",       desc = "panggil terlalu cepat berturut-turut"},
+        }
+
+        local function simulateTest(contract, test)
+            local argTypes = contract.argTypes or {}
+            local callCount = contract.callCount or 0
+            local result, severity = "SKIP", "INFO"
+
+            if test.name == "type mismatch" then
+                for _ in pairs(argTypes) do
+                    result = "CHECK"
+                    severity = "MEDIUM"
+                    break
+                end
+            elseif test.name == "arg count variance" then
+                local kinds = 0
+                for _ in pairs(argTypes) do kinds = kinds + 1 end
+                if kinds > 0 then
+                    result = "CHECK"
+                    severity = "MEDIUM"
+                end
+            elseif test.name == "out of range" then
+                for _, types in pairs(argTypes) do
+                    if types["number"] then
+                        result = "CHECK"
+                        severity = "HIGH"
+                        break
+                    end
+                end
+            elseif test.name == "wrong instance" then
+                for _, types in pairs(argTypes) do
+                    if types["Instance"] then
+                        result = "CHECK"
+                        severity = "HIGH"
+                        break
+                    end
+                end
+            elseif test.name == "invalid state" then
+                if callCount >= 2 then
+                    result = "CHECK"
+                    severity = "LOW"
+                end
+            elseif test.name == "rapid repeat" then
+                if callCount >= 5 then
+                    result = "CHECK"
+                    severity = "LOW"
+                end
+            end
+
+            return {
+                remote = contract.remote or "?",
+                method = contract.method or "FireServer",
+                test = test.name,
+                desc = test.desc,
+                result = result,
+                severity = severity,
+            }
+        end
+
+        function V:runTests()
+            self.setStage(5, "running")
+            self.pushLog("[5] Running test harness...")
+            local results = {}
+            for remoteKey, c in pairs(self.contracts) do
+                c.remote = remoteKey
+                for _, test in ipairs(TESTS) do
+                    local r = simulateTest(c, test)
+                    if r.result ~= "SKIP" then
+                        table.insert(results, r)
+                    end
+                end
+            end
+            self.testResults = results
+            self.pushLog("[5] DONE: " .. #results .. " test candidates")
+            self.setStage(5, "done")
+            return #results
+        end
+    end)
+    if not ok then warn("[VANZ] BLOK 7 error: " .. tostring(err)) end
+    print("[VANZ] BLOK 7 done")
+end
+
+-- vanz
+do
+    print("[VANZ] BLOK 8 start")
+    local ok, err = pcall(function()
+        local V = _G.vanz
+        if not V then return end
+
+        local function fmtVal(v)
+            if v == nil then return "nil" end
+            local t = typeof(v)
+            if t == "string" then
+                return '"' .. tostring(v) .. '"'
+            elseif t == "number" or t == "boolean" then
+                return tostring(v)
+            elseif t == "Instance" then
+                local ok2, n = pcall(function() return v:GetFullName() end)
+                return ok2 and n or tostring(v)
+            elseif t == "table" then
+                local parts = {}
+                for k, val in pairs(v) do
+                    table.insert(parts, tostring(k) .. "=" .. tostring(val))
+                    if #parts >= 5 then break end
+                end
+                return "{" .. table.concat(parts, ", ") .. "}"
+            else
+                return tostring(v)
+            end
+        end
+
+        function V:buildReport()
+            self.setStage(6, "running")
+            self.pushLog("[6] Building report...")
+
+            local lines = {}
+            table.insert(lines, "============================================")
+            table.insert(lines, "VANZ AUDIT REPORT")
+            table.insert(lines, "============================================")
+            table.insert(lines, "Generated : " .. os.date("%Y-%m-%d %H:%M:%S"))
+
+            local nRemotes = 0
+            for _ in pairs(self.remotes or {}) do nRemotes = nRemotes + 1 end
+            local nContracts = 0
+            for _ in pairs(self.contracts or {}) do nContracts = nContracts + 1 end
+
+            table.insert(lines, "Remotes  : " .. nRemotes)
+            table.insert(lines, "Logged   : " .. #(self.log or {}))
+            table.insert(lines, "Contracts: " .. nContracts)
+            table.insert(lines, "Tests    : " .. #(self.testResults or {}))
+            table.insert(lines, "============================================")
+            table.insert(lines, "")
+
+            local byRemote = {}
+            for _, r in ipairs(self.testResults or {}) do
+                byRemote[r.remote] = byRemote[r.remote] or {}
+                table.insert(byRemote[r.remote], r)
+            end
+
+            local sorted = {}
+            for k in pairs(byRemote) do table.insert(sorted, k) end
+            table.sort(sorted)
+
+            for _, key in ipairs(sorted) do
+                table.insert(lines, "Remote:")
+                table.insert(lines, "    " .. key)
+                table.insert(lines, "")
+
+                local contract = self.contracts[key]
+                if contract then
+                    table.insert(lines, "Normal input (from samples):")
+                    if contract.samples and #contract.samples > 0 then
+                        local s = contract.samples[1]
+                        local parts = {}
+                        for i, entry in ipairs(s) do
+                            parts[i] = fmtVal(entry.v)
+                        end
+                        table.insert(lines, "    " .. table.concat(parts, ", "))
+                    else
+                        table.insert(lines, "    (no sample)")
+                    end
+                    table.insert(lines, "")
+                    table.insert(lines, "Observed arg types:")
+                    for idx, types in pairs(contract.argTypes or {}) do
+                        local tl = {}
+                        for t, c in pairs(types) do
+                            table.insert(tl, t .. " x" .. c)
+                        end
+                        table.insert(lines, "    Arg #" .. idx .. ": " .. table.concat(tl, ", "))
+                    end
+                    table.insert(lines, "")
+                end
+
+                table.insert(lines, "Test results:")
+                for _, r in ipairs(byRemote[key]) do
+                    table.insert(lines, string.format(
+                        "    [%s] %s -- %s",
+                        r.severity or "?", r.test or "?", r.result or "?"
+                    ))
+                    table.insert(lines, "        " .. (r.desc or ""))
+                end
+                table.insert(lines, "")
+                table.insert(lines, "Impact:")
+                table.insert(lines, "    Perlu verifikasi manual apakah server benar-benar memproses")
+                table.insert(lines, "    input yang tidak sesuai tanpa penolakan.")
+                table.insert(lines, "")
+                table.insert(lines, "Recommendation:")
+                table.insert(lines, "    Validasi tipe, jumlah arg, dan range di server.")
+                table.insert(lines, "    Hitung ulang nilai sensitif di server.")
+                table.insert(lines, "    Tolak request yang tidak sesuai state.")
+                table.insert(lines, "")
+                table.insert(lines, "--------------------------------------------")
+                table.insert(lines, "")
+            end
+
+            if #sorted == 0 then
+                table.insert(lines, "Belum ada finding yang bisa dilaporkan.")
+                table.insert(lines, "Pastikan sudah:")
+                table.insert(lines, "  - Dump remotes")
+                table.insert(lines, "  - Log aktivitas (main game beberapa menit)")
+                table.insert(lines, "  - Analyze log -> contracts")
+                table.insert(lines, "  - Run tests")
+            end
+
+            table.insert(lines, "============================================")
+            table.insert(lines, "END OF REPORT")
+            table.insert(lines, "============================================")
+
+            self.report = table.concat(lines, "\n")
+            if self.ReportBox then
+                self.ReportBox.Text = self.report
+            end
+            self.pushLog("[6] DONE: report (" .. #self.report .. " char)")
+            self.setStage(6, "done")
+            return self.report
+        end
+    end)
+    if not ok then warn("[VANZ] BLOK 8 error: " .. tostring(err)) end
+    print("[VANZ] BLOK 8 done")
+end
+
+-- vanz
+do
+    print("[VANZ] BLOK 9 start")
+    local ok, err = pcall(function()
+        local V = _G.vanz
+        if not V then return end
+
+        function V:runAutoScan()
+            if self.autoScanRunning then
+                self.pushLog("[!] Auto-scan sudah jalan")
+                return
+            end
+            self.autoScanRunning = true
+            self.autoScanCancel = false
+            self.pushLog("========== AUTO-SCAN START ==========")
+            for i = 1, 6 do self.setStage(i, "idle") end
+
+            if not self.autoScanCancel then
+                self.dumperEnabled = true
+                if self.runDumper then pcall(function() self:runDumper() end) end
+                task.wait(0.5)
+            end
+
+            if not self.autoScanCancel then
+                self.setStage(2, "running")
+                self.pushLog("[2] Logger ACTIVE - observing 20 detik")
+                self.loggerEnabled = true
+                for _ = 1, 20 do
+                    if self.autoScanCancel then break end
+                    task.wait(1)
+                end
+                self.loggerEnabled = false
+                self.setStage(2, "done")
+                self.pushLog("[2] DONE: " .. #self.log .. " entries")
+            end
+
+            if not self.autoScanCancel then
+                if self.runInspector then pcall(function() self:runInspector() end) end
+                task.wait(0.3)
+            end
+
+            if not self.autoScanCancel then
+                if self.runClientInspector then pcall(function() self:runClientInspector() end) end
+                task.wait(0.3)
+            end
+
+            if not self.autoScanCancel then
+                if self.runTests then pcall(function() self:runTests() end) end
+                task.wait(0.3)
+            end
+
+            if not self.autoScanCancel then
+                if self.buildReport then pcall(function() self:buildReport() end) end
+            end
+
+            if self.autoScanCancel then
+                self.pushLog("========== AUTO-SCAN CANCELLED ==========")
+                self.autoScanCancel = false
+            else
+                self.pushLog("========== AUTO-SCAN COMPLETE ==========")
+            end
+
+            self.autoScanRunning = false
+        end
+    end)
+    if not ok then warn("[VANZ] BLOK 9 error: " .. tostring(err)) end
+    print("[VANZ] BLOK 9 done")
+end
+
+-- vanz
+do
+    local V = _G.vanz
+    print("")
+    print("==============================================")
+    print(" VANZ AUDIT FRAMEWORK READY")
+    print("==============================================")
+    if V then
+        print("Logger hooked: " .. tostring(V.loggerHooked))
+        local n = 0
+        for _ in pairs(V.remotes or {}) do n = n + 1 end
+        print("Remotes cached: " .. n)
+    end
+    print("==============================================")
+end
