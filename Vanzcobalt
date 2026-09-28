@@ -1,0 +1,956 @@
+-- vanz
+-- ============================================================
+-- VANZ COBALT v3 — FULL FUNCTIONAL
+-- Hook → List → Right Panel → Modal (Args/Code/Func) → Run/Copy
+-- ============================================================
+
+-- vanz
+-- BLOCK 0 : BOOT + SHARED STATE
+do
+    _G.vanz = _G.vanz or { State = {}, UI = {}, C = {}, Modules = {} }
+    local V = _G.vanz
+
+    V.State.remotes   = V.State.remotes or {}
+    V.State.byRef     = V.State.byRef or {}
+    V.State.selected  = nil
+    V.State.modal     = nil
+    V.State.modalTab  = "Args"
+    V.State.tab       = "Outgoing"
+    V.State.codeCache = ""
+    V.State.maxCalls  = 200
+    V.State.logBuffer = V.State.logBuffer or {}
+
+    local function errH(err)
+        return tostring(err) .. "\n" .. debug.traceback("", 2)
+    end
+    function V.run(name, fn)
+        local ok, r = xpcall(fn, errH)
+        if not ok then warn("[VANZ ERROR][" .. name .. "] " .. tostring(r)) end
+        return ok, r
+    end
+    function V.log(...)
+        local parts = {}
+        for _, v in ipairs({...}) do parts[#parts+1] = tostring(v) end
+        print("[VANZ]", table.concat(parts, " "))
+    end
+end
+
+
+-- vanz
+-- BLOCK 1 : CLIPBOARD + SERIALIZE + TYPE HELPERS
+do
+    _G.vanz.run("SERIALIZE", function()
+        local V = _G.vanz
+
+        local function tryEnv(env)
+            if type(env) ~= "table" then return nil end
+            for _, n in ipairs({"setclipboard","toclipboard","toClipboard","writeclipboard","writeClipboard"}) do
+                if type(env[n]) == "function" then return env[n], n end
+            end
+        end
+        function V.clipboard()
+            if type(getgenv) == "function" then
+                local ok, e = pcall(getgenv)
+                if ok and e then local f, n = tryEnv(e) if f then return f, n end end
+            end
+            if type(getfenv) == "function" then
+                local ok, e = pcall(getfenv)
+                if ok and e then local f, n = tryEnv(e) if f then return f, n end end
+            end
+            local f, n = tryEnv(_G); if f then return f, n end
+            return nil, nil
+        end
+
+        function V.typeOf(v)
+            if typeof then
+                local ok, t = pcall(function() return typeof(v) end)
+                if ok then return t end
+            end
+            return type(v)
+        end
+
+        -- Value → Lua code
+        local function toCode(v, indent)
+            indent = indent or ""
+            local t = type(v)
+            if t == "nil" then return "nil" end
+            if t == "boolean" then return tostring(v) end
+            if t == "number" then
+                if v ~= v then return "0/0" end
+                if v == math.huge then return "math.huge" end
+                if v == -math.huge then return "-math.huge" end
+                return tostring(v)
+            end
+            if t == "string" then return string.format("%q", v) end
+            if t == "function" then return "function() end" end
+            if t == "thread" then return "coroutine.create(function() end)" end
+            if t == "userdata" then
+                if typeof then
+                    local ok, rt = pcall(function() return typeof(v) end)
+                    if ok and rt == "Instance" then
+                        local ok2, n = pcall(function() return v:GetFullName() end)
+                        return n or "nil"
+                    end
+                end
+                return "newproxy(false)"
+            end
+            if t == "table" then
+                if typeof then
+                    local ok, rt = pcall(function() return typeof(v) end)
+                    if ok and rt and rt ~= "table" then
+                        if rt == "Vector3" then return string.format("Vector3.new(%f, %f, %f)", v.X, v.Y, v.Z) end
+                        if rt == "Vector2" then return string.format("Vector2.new(%f, %f)", v.X, v.Y) end
+                        if rt == "CFrame" then
+                            local x,y,z,R00,R01,R02,R10,R11,R12,R20,R21,R22 = v:GetComponents()
+                            return string.format(
+                                "CFrame.new(%s, %s, %s, %s, %s, %s, %s, %s, %s, %s, %s, %s)",
+                                tostring(x), tostring(y), tostring(z),
+                                tostring(R00), tostring(R01), tostring(R02),
+                                tostring(R10), tostring(R11), tostring(R12),
+                                tostring(R20), tostring(R21), tostring(R22))
+                        end
+                        if rt == "Color3" then
+                            return string.format("Color3.fromRGB(%d, %d, %d)",
+                                math.floor(v.R*255+0.5), math.floor(v.G*255+0.5), math.floor(v.B*255+0.5))
+                        end
+                        if rt == "UDim2" then return string.format("UDim2.new(%f, %d, %f, %d)", v.X.Scale, v.X.Offset, v.Y.Scale, v.Y.Offset) end
+                        if rt == "UDim" then return string.format("UDim.new(%f, %d)", v.Scale, v.Offset) end
+                        if rt == "Instance" then
+                            local ok2, n = pcall(function() return v:GetFullName() end)
+                            return n or "nil"
+                        end
+                        if rt == "EnumItem" then return "Enum." .. tostring(v.EnumType) .. "." .. v.Name end
+                        if rt == "BrickColor" then return "BrickColor.new(\"" .. v.Name .. "\")" end
+                        if rt == "NumberRange" then return string.format("NumberRange.new(%f, %f)", v.Min, v.Max) end
+                        if rt == "Rect" then return string.format("Rect.new(%d, %d, %d, %d)", v.Min.X, v.Min.Y, v.Max.X, v.Max.Y) end
+                        if rt == "TweenInfo" then return "TweenInfo.new(1)" end
+                        return "-- [unsupported: " .. tostring(rt) .. "]"
+                    end
+                end
+                local parts = {}
+                for k, vv in pairs(v) do
+                    local key
+                    if type(k) == "string" and k:match("^[%a_][%w_]*$") then key = k
+                    elseif type(k) == "number" then key = "[" .. tostring(k) .. "]"
+                    else key = "[" .. toCode(k) .. "]" end
+                    parts[#parts+1] = indent .. "    " .. key .. " = " .. toCode(vv, indent .. "    ")
+                end
+                if #parts == 0 then return "{}" end
+                return "{\n" .. table.concat(parts, ",\n") .. "\n" .. indent .. "}"
+            end
+            return "nil"
+        end
+        V.toCode = toCode
+
+        function V.shortPreview(v)
+            local rt = V.typeOf(v)
+            if rt == "CFrame" then
+                local x, y, z = v:GetComponents()
+                return string.format("%.3f, %.3f, %.3f, ...", x, y, z)
+            end
+            if rt == "Vector3" then return string.format("%.3f, %.3f, %.3f", v.X, v.Y, v.Z) end
+            if rt == "Vector2" then return string.format("%.3f, %.3f", v.X, v.Y) end
+            if rt == "Instance" then
+                local ok, n = pcall(function() return v:GetFullName() end)
+                return ok and n or "Instance"
+            end
+            if type(v) == "string" then
+                local s = string.format("%q", v)
+                if #s > 60 then s = s:sub(1, 60) .. "..." end
+                return s
+            end
+            local s = tostring(v)
+            if #s > 60 then s = s:sub(1, 60) .. "..." end
+            return s
+        end
+
+        function V.pathToCode(fullPath)
+            local service = fullPath:match("^([^%.]+)")
+            if not service then return "nil" end
+            local known = {
+                ReplicatedStorage = true, ReplicatedFirst = true,
+                Workspace = true, Players = true, Lighting = true,
+                SoundService = true, StarterGui = true, StarterPack = true,
+                StarterPlayer = true, Chat = true, Teams = true,
+            }
+            if known[service] then
+                return 'game:GetService("' .. service .. '").' .. fullPath:sub(#service + 2)
+            end
+            return fullPath
+        end
+    end)
+end
+
+
+-- vanz
+-- BLOCK 2 : HOOK RUNTIME
+do
+    _G.vanz.run("HOOK", function()
+        local V = _G.vanz
+
+        if type(getrawmetatable) ~= "function"
+           or type(setreadonly) ~= "function"
+           or type(getnamecallmethod) ~= "function" then
+            V.hookOK = false
+            V.log("hook API tidak tersedia")
+            return
+        end
+
+        local mt = getrawmetatable(game)
+        if not mt or not mt.__namecall then V.hookOK = false; return end
+        local oldNC = mt.__namecall
+        V.hookOK = true
+
+        local function record(inst, method, args)
+            local S = V.State
+            local entry = S.byRef[inst]
+            if not entry then
+                entry = {
+                    ref = inst,
+                    name = inst.Name,
+                    path = inst:GetFullName(),
+                    class = inst.ClassName,
+                    calls = {},
+                }
+                S.byRef[inst] = entry
+                table.insert(S.remotes, entry)
+                if V.onRemoteNew then pcall(V.onRemoteNew, entry) end
+            end
+            table.insert(entry.calls, {
+                method = method,
+                args = args,
+                time = os.date("%H:%M:%S"),
+            })
+            while #entry.calls > S.maxCalls do table.remove(entry.calls, 1) end
+
+            if V.onRemoteUpdate then pcall(V.onRemoteUpdate, entry) end
+            if S.selected == entry and V.renderRight then
+                pcall(V.renderRight, entry)
+            end
+        end
+
+        local wrapper
+        wrapper = function(self, ...)
+            if typeof(self) ~= "Instance" then return oldNC(self, ...) end
+            local m = getnamecallmethod()
+            if m == "FireServer" or m == "InvokeServer" then
+                local args = {...}
+                pcall(record, self, m, args)
+            end
+            return oldNC(self, ...)
+        end
+        if type(newcclosure) == "function" then
+            wrapper = newcclosure(wrapper)
+        end
+
+        pcall(function()
+            setreadonly(mt, false)
+            mt.__namecall = wrapper
+            setreadonly(mt, true)
+        end)
+
+        V._mt = mt
+        V._oldNC = oldNC
+        function V.unhook()
+            pcall(function()
+                setreadonly(mt, false)
+                mt.__namecall = oldNC
+                setreadonly(mt, true)
+            end)
+        end
+    end)
+end
+
+
+-- vanz
+-- BLOCK 3 : GUI SHELL
+do
+    _G.vanz.run("GUI_SHELL", function()
+        local V = _G.vanz
+        local Players = game:GetService("Players")
+        local RunService = game:GetService("RunService")
+        local player = Players.LocalPlayer
+        local parent = player:WaitForChild("PlayerGui")
+
+        if V.UI.gui and V.UI.gui.Parent then V.UI.gui:Destroy() end
+
+        local C = {
+            bg      = Color3.fromRGB(18, 18, 18),
+            header  = Color3.fromRGB(15, 15, 15),
+            leftBg  = Color3.fromRGB(22, 22, 22),
+            rightBg = Color3.fromRGB(13, 13, 13),
+            row     = Color3.fromRGB(30, 30, 30),
+            rowSel  = Color3.fromRGB(45, 45, 50),
+            btn     = Color3.fromRGB(30, 30, 30),
+            text    = Color3.fromRGB(230, 230, 230),
+            textDim = Color3.fromRGB(150, 150, 150),
+            orange  = Color3.fromRGB(255, 145, 35),
+            yellow  = Color3.fromRGB(245, 190, 25),
+            codeTxt = Color3.fromRGB(245, 190, 25),
+            good    = Color3.fromRGB(120, 210, 140),
+            danger  = Color3.fromRGB(220, 80, 80),
+        }
+        V.C = C
+
+        local gui = Instance.new("ScreenGui")
+        gui.Name = "VanzCobalt"
+        gui.ResetOnSpawn = false
+        gui.IgnoreGuiInset = true
+        gui.ZIndexBehavior = Enum.ZIndexBehavior.Sibling
+        gui.DisplayOrder = 2147483647
+        local ok = pcall(function() gui.Parent = game:GetService("CoreGui") end)
+        if not ok then gui.Parent = parent end
+        V.UI.gui = gui
+
+        RunService.RenderStepped:Connect(function()
+            if gui.Parent and gui.DisplayOrder ~= 2147483647 then
+                gui.DisplayOrder = 2147483647
+            end
+        end)
+
+        local main = Instance.new("Frame")
+        main.Name = "Main"
+        main.Size = UDim2.fromOffset(850, 520)
+        main.AnchorPoint = Vector2.new(0.5, 0.5)
+        main.Position = UDim2.new(0.5, 0, 0.5, 0)
+        main.BackgroundColor3 = C.bg
+        main.BorderSizePixel = 0
+        main.ClipsDescendants = true
+        main.Active = false
+        main.Parent = gui
+        V.UI.main = main
+
+        local mc = Instance.new("UICorner")
+        mc.CornerRadius = UDim.new(0, 12); mc.Parent = main
+        local ms = Instance.new("UIStroke")
+        ms.Color = Color3.fromRGB(45, 45, 45); ms.Parent = main
+
+        local function resize()
+            local cam = workspace.CurrentCamera
+            if not cam then return end
+            local vp = cam.ViewportSize
+            local w = math.min(850, vp.X - 20)
+            local h = math.min(520, vp.Y - 20)
+            main.Size = UDim2.fromOffset(w, h)
+        end
+        resize()
+        if workspace.CurrentCamera then
+            workspace.CurrentCamera:GetPropertyChangedSignal("ViewportSize"):Connect(resize)
+        end
+
+        -- TITLE BAR
+        local titleBar = Instance.new("Frame")
+        titleBar.Size = UDim2.new(1, 0, 0, 58)
+        titleBar.BackgroundColor3 = C.header
+        titleBar.BorderSizePixel = 0
+        titleBar.Active = true
+        titleBar.Parent = main
+        local tbc = Instance.new("UICorner")
+        tbc.CornerRadius = UDim.new(0, 12); tbc.Parent = titleBar
+        V.UI.titleBar = titleBar
+
+        local title = Instance.new("TextLabel")
+        title.BackgroundTransparency = 1
+        title.Position = UDim2.fromOffset(24, 15)
+        title.Size = UDim2.fromOffset(250, 30)
+        title.Font = Enum.Font.GothamBold
+        title.Text = "VANZ"
+        title.TextSize = 23
+        title.TextColor3 = C.text
+        title.TextXAlignment = Enum.TextXAlignment.Left
+        title.Parent = titleBar
+
+        local minBtn = Instance.new("TextButton")
+        minBtn.Size = UDim2.fromOffset(55, 45)
+        minBtn.Position = UDim2.new(1, -110, 0, 6)
+        minBtn.BackgroundTransparency = 1
+        minBtn.Text = "—"
+        minBtn.TextSize = 28
+        minBtn.TextColor3 = Color3.fromRGB(180, 180, 180)
+        minBtn.Font = Enum.Font.Gotham
+        minBtn.AutoButtonColor = false
+        minBtn.Parent = titleBar
+        V.UI.minBtn = minBtn
+
+        local closeBtn = Instance.new("TextButton")
+        closeBtn.Size = UDim2.fromOffset(55, 45)
+        closeBtn.Position = UDim2.new(1, -55, 0, 6)
+        closeBtn.BackgroundTransparency = 1
+        closeBtn.Text = "×"
+        closeBtn.TextSize = 28
+        closeBtn.TextColor3 = Color3.fromRGB(180, 180, 180)
+        closeBtn.Font = Enum.Font.Gotham
+        closeBtn.AutoButtonColor = false
+        closeBtn.Parent = titleBar
+        V.UI.closeBtn = closeBtn
+
+        -- BODY
+        local body = Instance.new("Frame")
+        body.Position = UDim2.fromOffset(0, 58)
+        body.Size = UDim2.new(1, 0, 1, -58)
+        body.BackgroundTransparency = 1
+        body.Parent = main
+        V.UI.body = body
+
+        -- LEFT PANEL
+        local left = Instance.new("Frame")
+        left.Size = UDim2.fromOffset(280, 1)
+        left.Position = UDim2.fromOffset(0, 0)
+        left.BackgroundColor3 = C.leftBg
+        left.BorderSizePixel = 0
+        left.Parent = body
+        V.UI.left = left
+
+        -- Left: dynamic width for mobile
+        local function resizeLeft()
+            local w = math.min(280, math.floor(main.AbsoluteSize.X * 0.35))
+            if w < 180 then w = 180 end
+            left.Size = UDim2.new(0, w, 1, 0)
+            V.UI.right.Position = UDim2.new(0, w, 0, 0)
+            V.UI.right.Size = UDim2.new(1, -w, 1, 0)
+        end
+
+        local leftTitle = Instance.new("TextLabel")
+        leftTitle.BackgroundTransparency = 1
+        leftTitle.Position = UDim2.fromOffset(20, 15)
+        leftTitle.Size = UDim2.new(1, -40, 0, 30)
+        leftTitle.Font = Enum.Font.GothamBold
+        leftTitle.Text = "Outgoing"
+        leftTitle.TextSize = 16
+        leftTitle.TextColor3 = C.text
+        leftTitle.TextXAlignment = Enum.TextXAlignment.Left
+        leftTitle.Parent = left
+        V.UI.leftTitle = leftTitle
+
+        local incomingLbl = Instance.new("TextLabel")
+        incomingLbl.BackgroundTransparency = 1
+        incomingLbl.Position = UDim2.fromOffset(150, 15)
+        incomingLbl.Size = UDim2.fromOffset(110, 30)
+        incomingLbl.Font = Enum.Font.Gotham
+        incomingLbl.Text = "Incoming"
+        incomingLbl.TextSize = 16
+        incomingLbl.TextColor3 = C.textDim
+        incomingLbl.TextXAlignment = Enum.TextXAlignment.Left
+        incomingLbl.Parent = left
+        V.UI.incomingLbl = incomingLbl
+
+        local listScroll = Instance.new("ScrollingFrame")
+        listScroll.Position = UDim2.fromOffset(10, 55)
+        listScroll.Size = UDim2.new(1, -20, 1, -65)
+        listScroll.BackgroundTransparency = 1
+        listScroll.BorderSizePixel = 0
+        listScroll.ScrollBarThickness = 4
+        listScroll.ScrollBarImageColor3 = Color3.fromRGB(70, 70, 70)
+        listScroll.ScrollingDirection = Enum.ScrollingDirection.Y
+        listScroll.AutomaticCanvasSize = Enum.AutomaticSize.Y
+        listScroll.CanvasSize = UDim2.new(0, 0, 0, 0)
+        listScroll.ScrollingEnabled = true
+        listScroll.Active = true
+        listScroll.ClipsDescendants = true
+        listScroll.Parent = left
+        V.UI.listScroll = listScroll
+
+        local layout = Instance.new("UIListLayout")
+        layout.Padding = UDim.new(0, 8)
+        layout.SortOrder = Enum.SortOrder.LayoutOrder
+        layout.Parent = listScroll
+
+        -- RIGHT PANEL
+        local right = Instance.new("Frame")
+        right.Position = UDim2.fromOffset(280, 0)
+        right.Size = UDim2.new(1, -280, 1, 0)
+        right.BackgroundColor3 = C.rightBg
+        right.BorderSizePixel = 0
+        right.Parent = body
+        V.UI.right = right
+
+        -- TABS
+        local tabs = Instance.new("Frame")
+        tabs.Position = UDim2.fromOffset(15, 15)
+        tabs.Size = UDim2.new(1, -30, 0, 42)
+        tabs.BackgroundTransparency = 1
+        tabs.Parent = right
+        V.UI.tabs = tabs
+
+        local function createTab(text, x)
+            local b = Instance.new("TextButton")
+            b.Position = UDim2.fromOffset(x, 0)
+            b.Size = UDim2.fromOffset(130, 38)
+            b.BackgroundColor3 = C.btn
+            b.BorderSizePixel = 0
+            b.Text = text
+            b.TextSize = 14
+            b.TextColor3 = Color3.fromRGB(210, 210, 210)
+            b.Font = Enum.Font.Gotham
+            b.AutoButtonColor = false
+            b.Parent = tabs
+            local c = Instance.new("UICorner")
+            c.CornerRadius = UDim.new(0, 7); c.Parent = b
+            return b
+        end
+
+        local argsTab = createTab("Arguments", 0)
+        local codeTab = createTab("Code", 140)
+        local infoTab = createTab("Function Info", 280)
+        V.UI.argsTab = argsTab
+        V.UI.codeTab = codeTab
+        V.UI.infoTab = infoTab
+
+        -- EDITORS
+        local function createEditor(color)
+            local box = Instance.new("TextBox")
+            box.Position = UDim2.fromOffset(15, 70)
+            box.Size = UDim2.new(1, -30, 1, -145)
+            box.BackgroundColor3 = Color3.fromRGB(8, 8, 8)
+            box.BorderSizePixel = 0
+            box.TextColor3 = color or C.codeTxt
+            box.PlaceholderColor3 = Color3.fromRGB(100, 100, 100)
+            box.TextSize = 14
+            box.Font = Enum.Font.Code
+            box.TextXAlignment = Enum.TextXAlignment.Left
+            box.TextYAlignment = Enum.TextYAlignment.Top
+            box.MultiLine = true
+            box.ClearTextOnFocus = false
+            box.TextWrapped = false
+            box.TextEditable = true
+            box.Text = ""
+            box.Parent = right
+            local c = Instance.new("UICorner")
+            c.CornerRadius = UDim.new(0, 8); c.Parent = box
+            local s = Instance.new("UIStroke")
+            s.Color = Color3.fromRGB(38, 38, 38); s.Parent = box
+            local p = Instance.new("UIPadding")
+            p.PaddingTop = UDim.new(0, 10)
+            p.PaddingLeft = UDim.new(0, 10)
+            p.PaddingRight = UDim.new(0, 10)
+            p.PaddingBottom = UDim.new(0, 10)
+            p.Parent = box
+            return box
+        end
+
+        local argBox = createEditor(Color3.fromRGB(245, 190, 25))
+        local codeBox = createEditor(Color3.fromRGB(200, 220, 200))
+        local infoBox = createEditor(Color3.fromRGB(205, 205, 205))
+        codeBox.Visible = false
+        infoBox.Visible = false
+        V.UI.argBox = argBox
+        V.UI.codeBox = codeBox
+        V.UI.infoBox = infoBox
+
+        -- BOTTOM CONTROLS
+        local copyBtn = Instance.new("TextButton")
+        copyBtn.Position = UDim2.new(0, 15, 1, -62)
+        copyBtn.Size = UDim2.fromOffset(120, 42)
+        copyBtn.BackgroundColor3 = C.btn
+        copyBtn.BorderSizePixel = 0
+        copyBtn.Text = "Copy Code"
+        copyBtn.TextSize = 14
+        copyBtn.TextColor3 = Color3.fromRGB(220, 220, 220)
+        copyBtn.Font = Enum.Font.Gotham
+        copyBtn.AutoButtonColor = false
+        copyBtn.Parent = right
+        local cc = Instance.new("UICorner")
+        cc.CornerRadius = UDim.new(0, 7); cc.Parent = copyBtn
+        V.UI.copyBtn = copyBtn
+
+        local runBtn = Instance.new("TextButton")
+        runBtn.Position = UDim2.new(0, 145, 1, -62)
+        runBtn.Size = UDim2.fromOffset(120, 42)
+        runBtn.BackgroundColor3 = Color3.fromRGB(35, 35, 35)
+        runBtn.BorderSizePixel = 0
+        runBtn.Text = "Run"
+        runBtn.TextSize = 14
+        runBtn.TextColor3 = C.yellow
+        runBtn.Font = Enum.Font.Gotham
+        runBtn.AutoButtonColor = false
+        runBtn.Parent = right
+        local rc = Instance.new("UICorner")
+        rc.CornerRadius = UDim.new(0, 7); rc.Parent = runBtn
+        V.UI.runBtn = runBtn
+
+        local status = Instance.new("TextLabel")
+        status.BackgroundTransparency = 1
+        status.Position = UDim2.new(0, 280, 1, -53)
+        status.Size = UDim2.new(1, -295, 0, 30)
+        status.Font = Enum.Font.Gotham
+        status.Text = "Ready"
+        status.TextSize = 13
+        status.TextColor3 = C.textDim
+        status.TextXAlignment = Enum.TextXAlignment.Left
+        status.Parent = right
+        V.UI.status = status
+
+        -- LOGO (minimize state)
+        local logo = Instance.new("TextButton")
+        logo.Size = UDim2.fromOffset(52, 52)
+        logo.Position = UDim2.new(0.5, -26, 0.5, -26)
+        logo.BackgroundColor3 = Color3.fromRGB(24, 24, 26)
+        logo.BorderSizePixel = 0
+        logo.AutoButtonColor = false
+        logo.Text = "V"
+        logo.TextSize = 20
+        logo.Font = Enum.Font.GothamBlack
+        logo.TextColor3 = C.orange
+        logo.Visible = false
+        logo.Active = true
+        logo.Parent = gui
+        local lc = Instance.new("UICorner")
+        lc.CornerRadius = UDim.new(1, 0); lc.Parent = logo
+        local ls = Instance.new("UIStroke")
+        ls.Color = C.orange; ls.Parent = logo
+        V.UI.logo = logo
+
+        resizeLeft()
+        main:GetPropertyChangedSignal("AbsoluteSize"):Connect(resizeLeft)
+    end)
+end
+
+
+-- vanz
+-- BLOCK 4 : UI LOGIC (list + right panel + modal-less flow)
+do
+    _G.vanz.run("UI_LOGIC", function()
+        local V = _G.vanz
+        local C = V.C
+        local listScroll = V.UI.listScroll
+        local argBox = V.UI.argBox
+        local codeBox = V.UI.codeBox
+        local infoBox = V.UI.infoBox
+        local status = V.UI.status
+
+        local rows = {}
+        V.rows = rows
+
+        local function setStatus(txt, color)
+            status.Text = txt
+            status.TextColor3 = color or C.textDim
+        end
+        V.setStatus = setStatus
+
+        -- ROW BUILDER
+        local function buildRow(entry)
+            local row = Instance.new("TextButton")
+            row.Size = UDim2.new(1, -5, 0, 50)
+            row.BackgroundColor3 = C.row
+            row.BorderSizePixel = 0
+            row.AutoButtonColor = false
+            row.Text = ""
+            row.Parent = listScroll
+            local c = Instance.new("UICorner")
+            c.CornerRadius = UDim.new(0, 7); c.Parent = row
+
+            local icon = Instance.new("TextLabel")
+            icon.Position = UDim2.fromOffset(12, 10)
+            icon.Size = UDim2.fromOffset(30, 30)
+            icon.BackgroundTransparency = 1
+            icon.Font = Enum.Font.GothamBold
+            icon.Text = "⚡"
+            icon.TextSize = 18
+            icon.TextColor3 = C.orange
+            icon.TextXAlignment = Enum.TextXAlignment.Left
+            icon.Parent = row
+
+            local nameLbl = Instance.new("TextLabel")
+            nameLbl.Position = UDim2.fromOffset(45, 7)
+            nameLbl.Size = UDim2.new(1, -100, 0, 22)
+            nameLbl.BackgroundTransparency = 1
+            nameLbl.Font = Enum.Font.Gotham
+            nameLbl.Text = entry.name
+            nameLbl.TextSize = 14
+            nameLbl.TextColor3 = C.text
+            nameLbl.TextXAlignment = Enum.TextXAlignment.Left
+            nameLbl.TextTruncate = Enum.TextTruncate.AtEnd
+            nameLbl.Parent = row
+
+            local pathLbl = Instance.new("TextLabel")
+            pathLbl.Position = UDim2.fromOffset(45, 27)
+            pathLbl.Size = UDim2.new(1, -100, 0, 16)
+            pathLbl.BackgroundTransparency = 1
+            pathLbl.Font = Enum.Font.Code
+            pathLbl.Text = entry.class
+            pathLbl.TextSize = 9
+            pathLbl.TextColor3 = C.textDim
+            pathLbl.TextXAlignment = Enum.TextXAlignment.Left
+            pathLbl.TextTruncate = Enum.TextTruncate.AtEnd
+            pathLbl.Parent = row
+
+            local countLbl = Instance.new("TextLabel")
+            countLbl.Position = UDim2.new(1, -60, 0, 7)
+            countLbl.Size = UDim2.fromOffset(50, 22)
+            countLbl.BackgroundTransparency = 1
+            countLbl.Font = Enum.Font.Gotham
+            countLbl.Text = "x0"
+            countLbl.TextSize = 13
+            countLbl.TextColor3 = C.textDim
+            countLbl.TextXAlignment = Enum.TextXAlignment.Right
+            countLbl.Parent = row
+
+            row.MouseButton1Click:Connect(function()
+                for _, r in pairs(rows) do
+                    r.row.BackgroundColor3 = C.row
+                end
+                row.BackgroundColor3 = C.rowSel
+                V.State.selected = entry
+                V.selectEntry(entry)
+            end)
+
+            return { row = row, countLbl = countLbl, entry = entry }
+        end
+
+        -- SELECT ENTRY (update right panel)
+        function V.selectEntry(entry)
+            V.State.selected = entry
+            setStatus("Selected: " .. entry.name, C.text)
+
+            local calls = entry.calls or {}
+            local latest = calls[#calls]
+
+            if not latest then
+                argBox.Text = "-- Belum ada argument"
+                codeBox.Text = "-- Belum ada call"
+                infoBox.Text = "-- Belum ada call"
+                return
+            end
+
+            -- ARGS
+            local lines = {}
+            if #latest.args == 0 then
+                lines[#lines+1] = "-- no arguments"
+            else
+                for i, v in ipairs(latest.args) do
+                    lines[#lines+1] = string.format("%d  %s", i, V.shortPreview(v))
+                end
+            end
+            argBox.Text = table.concat(lines, "\n")
+
+            -- CODE
+            local codeLines = {}
+            codeLines[#codeLines+1] = "-- Generated by VANZ Cobalt"
+            codeLines[#codeLines+1] = "-- Remote: " .. entry.path
+            codeLines[#codeLines+1] = "-- Method: " .. latest.method
+            codeLines[#codeLines+1] = ""
+            codeLines[#codeLines+1] = "local Event = " .. V.pathToCode(entry.path)
+            codeLines[#codeLines+1] = ""
+            if #latest.args == 0 then
+                codeLines[#codeLines+1] = "Event:" .. latest.method .. "()"
+            else
+                codeLines[#codeLines+1] = "Event:" .. latest.method .. "("
+                for i, v in ipairs(latest.args) do
+                    local code = V.toCode(v, "    ")
+                    local sep = (i < #latest.args) and "," or ""
+                    codeLines[#codeLines+1] = "    " .. code .. sep
+                end
+                codeLines[#codeLines+1] = ")"
+            end
+            local codeStr = table.concat(codeLines, "\n")
+            codeBox.Text = codeStr
+            V.State.codeCache = codeStr
+
+            -- INFO
+            local infoLines = {}
+            infoLines[#infoLines+1] = "Function Info"
+            infoLines[#infoLines+1] = ""
+            infoLines[#infoLines+1] = "Name        : " .. entry.name
+            infoLines[#infoLines+1] = "Path        : " .. entry.path
+            infoLines[#infoLines+1] = "Class       : " .. entry.class
+            infoLines[#infoLines+1] = "Method      : " .. latest.method
+            infoLines[#infoLines+1] = "Time        : " .. latest.time
+            infoLines[#infoLines+1] = "Args count  : " .. #latest.args
+            infoLines[#infoLines+1] = "Total calls : " .. #calls
+            infoBox.Text = table.concat(infoLines, "\n")
+        end
+
+        -- HOOK CALLBACKS
+        function V.onRemoteNew(entry)
+            local r = buildRow(entry)
+            rows[entry] = r
+            if not V.State.selected then
+                r.row.BackgroundColor3 = C.rowSel
+                V.State.selected = entry
+                V.selectEntry(entry)
+            end
+        end
+
+        function V.onRemoteUpdate(entry)
+            local r = rows[entry]
+            if r then r.countLbl.Text = "x" .. #entry.calls end
+            if V.State.selected == entry then
+                V.selectEntry(entry)
+            end
+        end
+
+        -- TAB SWITCH
+        local function showTab(tab)
+            argBox.Visible  = (tab == "args")
+            codeBox.Visible = (tab == "code")
+            infoBox.Visible = (tab == "info")
+            for name, btn in pairs({args = V.UI.argsTab, code = V.UI.codeTab, info = V.UI.infoTab}) do
+                local active = (name == tab)
+                btn.BackgroundColor3 = active and C.rowSel or C.btn
+                btn.TextColor3 = active and C.text or Color3.fromRGB(210, 210, 210)
+            end
+        end
+        V.UI.argsTab.MouseButton1Click:Connect(function() showTab("args") end)
+        V.UI.codeTab.MouseButton1Click:Connect(function() showTab("code") end)
+        V.UI.infoTab.MouseButton1Click:Connect(function() showTab("info") end)
+        showTab("args")
+
+        -- COPY
+        V.UI.copyBtn.MouseButton1Click:Connect(function()
+            local text = codeBox.Text or ""
+            if text == "" then setStatus("Kosong", C.textDim); return end
+            local fn, name = V.clipboard()
+            if fn then
+                if pcall(fn, text) then
+                    setStatus("Copied ✓ (" .. tostring(name) .. ")", C.good)
+                    return
+                end
+            end
+            codeBox:CaptureFocus()
+            task.wait(0.05)
+            codeBox.CursorPosition = #text + 1
+            codeBox.SelectionStart = 1
+            setStatus("Auto-select — Ctrl+C", C.yellow)
+        end)
+
+        -- RUN
+        V.UI.runBtn.MouseButton1Click:Connect(function()
+            local code = codeBox.Text or ""
+            if code == "" then setStatus("Kosong", C.textDim); return end
+            local loader = loadstring or load
+            if type(loader) ~= "function" then
+                setStatus("No loadstring", C.danger); return
+            end
+            local fn, err = loader(code)
+            if not fn then
+                warn("[VANZ RUN] " .. tostring(err))
+                setStatus("Parse error", C.danger)
+                return
+            end
+            local ok, e = pcall(fn)
+            if ok then
+                setStatus("Run OK ✓", C.good)
+            else
+                warn("[VANZ RUN] " .. tostring(e))
+                setStatus("Run error", C.danger)
+            end
+        end)
+    end)
+end
+
+
+-- vanz
+-- BLOCK 5 : CONTROLS (drag, minimize, logo, close)
+do
+    _G.vanz.run("CONTROLS", function()
+        local V = _G.vanz
+        local UIS = game:GetService("UserInputService")
+        local main = V.UI.main
+        local titleBar = V.UI.titleBar
+        local minBtn = V.UI.minBtn
+        local closeBtn = V.UI.closeBtn
+        local logo = V.UI.logo
+
+        -- DRAG VIA TITLE BAR
+        local dragging, dragStart, startPos, dragInput
+
+        local function isOverBtn(pos)
+            for _, b in ipairs({minBtn, closeBtn}) do
+                local ap, as = b.AbsolutePosition, b.AbsoluteSize
+                if pos.X >= ap.X and pos.X <= ap.X + as.X
+                   and pos.Y >= ap.Y and pos.Y <= ap.Y + as.Y then
+                    return true
+                end
+            end
+            return false
+        end
+
+        titleBar.InputBegan:Connect(function(input)
+            if input.UserInputType ~= Enum.UserInputType.MouseButton1
+               and input.UserInputType ~= Enum.UserInputType.Touch then return end
+            if isOverBtn(input.Position) then return end
+            dragging = true
+            dragStart = input.Position
+            startPos = main.Position
+            dragInput = input
+        end)
+        titleBar.InputChanged:Connect(function(input)
+            if input.UserInputType == Enum.UserInputType.MouseMovement
+               or input.UserInputType == Enum.UserInputType.Touch then
+                dragInput = input
+            end
+        end)
+        UIS.InputChanged:Connect(function(input)
+            if not dragging or input ~= dragInput then return end
+            local d = input.Position - dragStart
+            main.Position = UDim2.new(
+                startPos.X.Scale, startPos.X.Offset + d.X,
+                startPos.Y.Scale, startPos.Y.Offset + d.Y
+            )
+        end)
+        UIS.InputEnded:Connect(function(input)
+            if input == dragInput then dragging = false end
+        end)
+
+        -- MINIMIZE → logo
+        minBtn.MouseButton1Click:Connect(function()
+            main.Visible = false
+            logo.Visible = true
+            logo.Position = UDim2.new(0.5, -26, 0.5, -26)
+        end)
+
+        -- CLOSE
+        closeBtn.MouseButton1Click:Connect(function()
+            if V.unhook then V.unhook() end
+            V.UI.gui:Destroy()
+        end)
+
+        -- LOGO drag + klik restore
+        local lDrag, lStart, lPos, lInput, lMoved = false, nil, nil, nil, 0
+        logo.InputBegan:Connect(function(input)
+            if input.UserInputType ~= Enum.UserInputType.MouseButton1
+               and input.UserInputType ~= Enum.UserInputType.Touch then return end
+            lDrag = true
+            lMoved = 0
+            lStart = input.Position
+            lPos = logo.Position
+            lInput = input
+        end)
+        logo.InputChanged:Connect(function(input)
+            if input.UserInputType == Enum.UserInputType.MouseMovement
+               or input.UserInputType == Enum.UserInputType.Touch then
+                lInput = input
+            end
+        end)
+        UIS.InputChanged:Connect(function(input)
+            if not lDrag or input ~= lInput then return end
+            local d = input.Position - lStart
+            lMoved = d.Magnitude
+            logo.Position = UDim2.new(
+                lPos.X.Scale, lPos.X.Offset + d.X,
+                lPos.Y.Scale, lPos.Y.Offset + d.Y
+            )
+        end)
+        UIS.InputEnded:Connect(function(input)
+            if not lDrag or input ~= lInput then return end
+            lDrag = false
+            if lMoved < 8 then
+                logo.Visible = false
+                main.Visible = true
+            end
+        end)
+    end)
+end
+
+
+-- vanz
+-- BLOCK 6 : START
+do
+    _G.vanz.run("START", function()
+        local V = _G.vanz
+        V.log("Cobalt v3 ready")
+        V.log("hook:", V.hookOK and "OK" or "N/A")
+        local _, n = V.clipboard()
+        V.log("clipboard:", n or "N/A")
+    end)
+end
