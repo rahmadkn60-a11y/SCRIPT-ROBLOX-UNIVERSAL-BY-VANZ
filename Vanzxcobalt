@@ -12660,28 +12660,133 @@ for _, ScriptRef in next, ScriptsToRun do
     Defer(LoadScript, ScriptRef)
 end
 -- ============================================================
--- VANZ COPY ALL BUTTON
--- Baca Arguments + Code + Function Info dari modal → copy
+-- VANZ FLOATING COPY-ALL v2
+-- Debug mode + robust modal detection
 -- Paste at bottom of Cobalt
 -- ============================================================
 
 do
-    local waits = 0
-    repeat
-        task.wait(0.2)
-        waits = waits + 1
-    until (getgenv().CobaltInitialized == true and getgenv().Cobalt) or waits > 150
-
-    local wax = getgenv().Cobalt
-    if not wax then
-        warn("[VANZ-COPY] Cobalt not ready after 30s.")
-        return
+    -- Cleanup lama
+    for _, name in ipairs({"VANZCopyAll", "VANZCopyAllV2"}) do
+        pcall(function()
+            local cg = game:GetService("CoreGui")
+            local old = cg:FindFirstChild(name)
+            if old then old:Destroy() end
+            local pg = game:GetService("Players").LocalPlayer:FindFirstChild("PlayerGui")
+            if pg then
+                local old2 = pg:FindFirstChild(name)
+                if old2 then old2:Destroy() end
+            end
+        end)
     end
 
-    print("[VANZ-COPY] Cobalt ready. Injecting Copy All...")
+    local DEBUG = true
+    local function dbg(...)
+        if DEBUG then print("[VANZ-COPY]", ...) end
+    end
 
     -- ========================================================
-    -- FIND SCREEN GUI + INFO BUTTONS
+    -- GUI
+    -- ========================================================
+    local gui = Instance.new("ScreenGui")
+    gui.Name = "VANZCopyAllV2"
+    gui.ResetOnSpawn = false
+    gui.IgnoreGuiInset = true
+    gui.DisplayOrder = 2147483647
+    gui.ZIndexBehavior = Enum.ZIndexBehavior.Sibling
+
+    local ok = pcall(function() gui.Parent = game:GetService("CoreGui") end)
+    if not ok then
+        gui.Parent = game:GetService("Players").LocalPlayer:WaitForChild("PlayerGui")
+    end
+
+    -- MAIN BUTTON
+    local btn = Instance.new("TextButton")
+    btn.Name = "CopyAllBtn"
+    btn.AnchorPoint = Vector2.new(0.5, 0)
+    btn.Position = UDim2.new(0.5, 0, 0, 80)
+    btn.Size = UDim2.new(0, 140, 0, 46)
+    btn.BackgroundColor3 = Color3.fromRGB(140, 40, 200)
+    btn.BackgroundTransparency = 0
+    btn.BorderSizePixel = 0
+    btn.Text = "📋 COPY ALL"
+    btn.TextColor3 = Color3.fromRGB(255, 255, 255)
+    btn.TextSize = 14
+    btn.Font = Enum.Font.GothamBold
+    btn.AutoButtonColor = false
+    btn.Active = true
+    btn.ZIndex = 2147483646
+    btn.Parent = gui
+
+    Instance.new("UICorner", btn).CornerRadius = UDim.new(0, 12)
+
+    local stroke = Instance.new("UIStroke")
+    stroke.Color = Color3.fromRGB(220, 150, 255)
+    stroke.Thickness = 2
+    stroke.Parent = btn
+
+    -- STATUS label
+    local status = Instance.new("TextLabel")
+    status.Name = "Status"
+    status.AnchorPoint = Vector2.new(0.5, 0)
+    status.Position = UDim2.new(0.5, 0, 0, 130)
+    status.Size = UDim2.new(0, 400, 0, 20)
+    status.BackgroundColor3 = Color3.fromRGB(0, 0, 0)
+    status.BackgroundTransparency = 0.4
+    status.Text = "Ready - Buka event di Cobalt dulu"
+    status.TextColor3 = Color3.fromRGB(220, 220, 240)
+    status.TextSize = 12
+    status.Font = Enum.Font.Code
+    status.ZIndex = 2147483646
+    status.Parent = gui
+
+    Instance.new("UICorner", status).CornerRadius = UDim.new(0, 6)
+
+    -- ========================================================
+    -- DRAG
+    -- ========================================================
+    local UIS = game:GetService("UserInputService")
+    local dragging, dragStart, startPos, moved
+
+    btn.InputBegan:Connect(function(input)
+        if input.UserInputType == Enum.UserInputType.MouseButton1
+            or input.UserInputType == Enum.UserInputType.Touch then
+            dragging = true
+            moved = false
+            dragStart = input.Position
+            startPos = btn.Position
+        end
+    end)
+
+    btn.InputEnded:Connect(function(input)
+        if input.UserInputType == Enum.UserInputType.MouseButton1
+            or input.UserInputType == Enum.UserInputType.Touch then
+            dragging = false
+        end
+    end)
+
+    UIS.InputChanged:Connect(function(input)
+        if not dragging then return end
+        if input.UserInputType ~= Enum.UserInputType.MouseMovement
+            and input.UserInputType ~= Enum.UserInputType.Touch then return end
+
+        local delta = input.Position - dragStart
+        if math.abs(delta.X) > 5 or math.abs(delta.Y) > 5 then
+            moved = true
+        end
+
+        btn.Position = UDim2.new(
+            startPos.X.Scale, startPos.X.Offset + delta.X,
+            startPos.Y.Scale, startPos.Y.Offset + delta.Y
+        )
+        status.Position = UDim2.new(
+            startPos.X.Scale, startPos.X.Offset + delta.X,
+            startPos.Y.Scale, startPos.Y.Offset + delta.Y + 50
+        )
+    end)
+
+    -- ========================================================
+    -- FIND COBALT GUI
     -- ========================================================
     local function findCobaltGui()
         local containers = {}
@@ -12693,7 +12798,9 @@ do
                 if pg then table.insert(containers, pg) end
             end
         end)
+
         for _, c in ipairs(containers) do
+            if not c then continue end
             for _, child in ipairs(c:GetChildren()) do
                 if child:IsA("ScreenGui") and child.Name == "Cobalt" then
                     return child
@@ -12703,248 +12810,279 @@ do
         return nil
     end
 
-    local function waitForInfoButtons()
-        for i = 1, 60 do
-            local gui = findCobaltGui()
-            if gui then
-                for _, obj in ipairs(gui:GetDescendants()) do
-                    if obj:IsA("Frame") and obj.Name == "InfoButtons" then
-                        return obj, obj.Parent
+    -- ========================================================
+    -- FIND INFO MODAL — pakai signature tab
+    -- ========================================================
+    local function findInfoModal()
+        local cobaltGui = findCobaltGui()
+        if not cobaltGui then
+            dbg("Cobalt ScreenGui not found")
+            return nil
+        end
+
+        -- Scan SEMUA descendant yang ada tab "Arguments" / "Code" / "Function Info"
+        -- Modal punya struktur:
+        --   TextButton (modal frame)
+        --     Frame (tabsContainer / ScrollingFrame)
+        --       TextButton (tab button) dengan Text = "Arguments" / "Code" / "Function Info"
+        --     Frame (tab content) → ScrollingFrame
+
+        local candidates = {}
+
+        for _, obj in ipairs(cobaltGui:GetDescendants()) do
+            if obj:IsA("TextButton") then
+                local txt = obj.Text
+                if txt == "Arguments" or txt == "Code" or txt == "Function Info" then
+                    -- Naik ke atas buat cari modal frame
+                    local current = obj
+                    for _ = 1, 6 do
+                        current = current.Parent
+                        if not current then break end
+
+                        -- Cek apakah current punya minimal 3 tab-like TextButton descendant
+                        local tabCount = 0
+                        local foundTabs = {}
+                        for _, desc in ipairs(current:GetDescendants()) do
+                            if desc:IsA("TextButton") then
+                                local t = desc.Text
+                                if t == "Arguments" or t == "Code" or t == "Function Info" then
+                                    tabCount = tabCount + 1
+                                    foundTabs[t] = true
+                                end
+                            end
+                        end
+
+                        if tabCount >= 3 and foundTabs["Arguments"] and foundTabs["Code"] and foundTabs["Function Info"] then
+                            -- Ini modal! Cek visible
+                            if current:IsA("GuiObject") and current.Visible then
+                                table.insert(candidates, current)
+                            end
+                            break
+                        end
                     end
                 end
             end
-            task.wait(0.25)
         end
-        return nil, nil
+
+        if #candidates == 0 then
+            dbg("No visible Info modal found")
+            return nil
+        end
+
+        -- Ambil candidate paling atas (yang paling nested / atau yang visible)
+        dbg("Found", #candidates, "modal candidates")
+        return candidates[1], candidates
     end
 
-    local InfoButtons, InfoFrame = waitForInfoButtons()
-    if not InfoButtons then
-        warn("[VANZ-COPY] InfoButtons not found.")
-        return
-    end
-
-    print("[VANZ-COPY] InfoButtons found. InfoFrame:", InfoFrame and InfoFrame.Name or "?")
-
     -- ========================================================
-    -- EXTRACT FROM UI
+    -- EXTRACT
     -- ========================================================
-    local function extractFromUI()
-        local result = { args = {}, code = "", fninfo = "" }
-        if not InfoFrame then return result end
+    local function extractFromModal(modal)
+        dbg("Extracting from modal:", modal:GetFullName())
 
-        for _, container in ipairs(InfoFrame:GetChildren()) do
-            if not container:IsA("Frame") then continue end
-            local scroller = container:FindFirstChildOfClass("ScrollingFrame")
-            if not scroller then continue end
-
-            local innerFrames = {}
-            local textLabels = {}
-            for _, c in ipairs(scroller:GetChildren()) do
-                if c:IsA("Frame") then
-                    table.insert(innerFrames, c)
-                elseif c:IsA("TextLabel") then
-                    table.insert(textLabels, c)
+        -- Cari 3 ScrollingFrame yang berisi konten tab
+        -- Tab content frame ada di modal, punya ScrollingFrame
+        local scrollers = {}
+        for _, obj in ipairs(modal:GetDescendants()) do
+            if obj:IsA("ScrollingFrame") then
+                -- Skip tab navigation scroller (yang horizontal kecil tinggi)
+                local h = obj.AbsoluteSize.Y
+                if h > 100 then
+                    table.insert(scrollers, obj)
                 end
             end
+        end
 
-            -- ARGUMENTS: ScrollingFrame → 1 Frame (ArgumentsInfoFrame) → many Frames
-            if #innerFrames == 1 and #textLabels == 0 then
-                local argHolder = innerFrames[1]
-                for _, argFrame in ipairs(argHolder:GetChildren()) do
-                    if argFrame:IsA("Frame") then
+        dbg("Found", #scrollers, "content scrollers (height > 100)")
+
+        -- Klasifikasi
+        local cls = { args = nil, code = nil, fninfo = nil, unknown = {} }
+
+        for _, sf in ipairs(scrollers) do
+            local frames = 0
+            local labels = 0
+            for _, c in ipairs(sf:GetChildren()) do
+                if c:IsA("Frame") then frames = frames + 1 end
+                if c:IsA("TextLabel") then labels = labels + 1 end
+            end
+
+            dbg(string.format("  Scroller %s: frames=%d labels=%d", sf.Name, frames, labels))
+
+            if frames >= 1 and labels == 0 then
+                -- Arguments (container Frame → arg holders)
+                cls.args = sf
+            elseif labels >= 1 and frames == 0 then
+                -- Ambil text
+                local firstText = ""
+                for _, c in ipairs(sf:GetChildren()) do
+                    if c:IsA("TextLabel") and #c.Text > 0 then
+                        firstText = c.Text
+                        break
+                    end
+                end
+
+                if firstText:find("Closure Type") or firstText:find("Function Address")
+                   or firstText:find("Script Path") or firstText:find("Calling Line") then
+                    cls.fninfo = sf
+                else
+                    cls.code = sf
+                end
+            else
+                table.insert(cls.unknown, sf)
+            end
+        end
+
+        return cls
+    end
+
+    local function extractArguments(sf)
+        local args = {}
+        for _, container in ipairs(sf:GetChildren()) do
+            if container:IsA("Frame") then
+                for _, holder in ipairs(container:GetChildren()) do
+                    if holder:IsA("Frame") then
                         local parts = {}
-                        for _, lbl in ipairs(argFrame:GetChildren()) do
+                        for _, lbl in ipairs(holder:GetChildren()) do
                             if lbl:IsA("TextLabel") and #lbl.Text > 0 then
                                 table.insert(parts, lbl.Text)
                             end
                         end
                         if #parts > 0 then
-                            table.insert(result.args, table.concat(parts, " | "))
+                            table.insert(args, table.concat(parts, " | "))
                         end
                     end
                 end
-            -- CODE: multiple TextLabels
-            elseif #textLabels >= 2 and #innerFrames == 0 then
-                local parts = {}
-                for _, lbl in ipairs(textLabels) do
-                    if #lbl.Text > 0 then
-                        table.insert(parts, lbl.Text)
-                    end
-                end
-                result.code = table.concat(parts, "\n"):gsub("<[^>]+>", "")
-            -- FUNCTION INFO: single TextLabel
-            elseif #textLabels == 1 and #innerFrames == 0 then
-                local t = textLabels[1].Text
-                if t:find("Closure") or t:find("Function") or t:find("Address")
-                   or t:find("Script Path") or t:find("Upvalues") then
-                    result.fninfo = t:gsub("<[^>]+>", "")
-                else
-                    result.code = t:gsub("<[^>]+>", "")
-                end
             end
         end
+        return args
+    end
 
-        return result
+    local function extractText(sf)
+        local parts = {}
+        for _, c in ipairs(sf:GetChildren()) do
+            if c:IsA("TextLabel") and #c.Text > 0 then
+                local clean = c.Text:gsub("<[^>]+>", "")
+                table.insert(parts, clean)
+            end
+        end
+        return table.concat(parts, "\n")
     end
 
     -- ========================================================
-    -- BUILD OPTIONS
+    -- BUILD
     -- ========================================================
-    local function buildAllText()
-        local e = extractFromUI()
+    local function buildFullText()
+        local modal = findInfoModal()
+        if not modal then return nil, "No Info modal found" end
+
+        local cls = extractFromModal(modal)
         local parts = {}
         table.insert(parts, "=============================================")
         table.insert(parts, "VANZ COPY-ALL — " .. os.date("%Y-%m-%d %H:%M:%S"))
         table.insert(parts, "=============================================")
         table.insert(parts, "")
-        table.insert(parts, "========== ARGUMENTS (" .. #e.args .. ") ==========")
-        for i, a in ipairs(e.args) do
-            table.insert(parts, "[" .. i .. "] " .. a)
+
+        table.insert(parts, "========== ARGUMENTS ==========")
+        if cls.args then
+            local args = extractArguments(cls.args)
+            if #args == 0 then
+                table.insert(parts, "(no args)")
+            else
+                for i, a in ipairs(args) do
+                    table.insert(parts, string.format("[%d] %s", i, a))
+                end
+            end
+        else
+            table.insert(parts, "(not found)")
         end
         table.insert(parts, "")
+
         table.insert(parts, "========== CODE ==========")
-        table.insert(parts, e.code)
+        if cls.code then
+            table.insert(parts, extractText(cls.code))
+        else
+            table.insert(parts, "(not found)")
+        end
         table.insert(parts, "")
+
         table.insert(parts, "========== FUNCTION INFO ==========")
-        table.insert(parts, e.fninfo)
-        return table.concat(parts, "\n")
+        if cls.fninfo then
+            table.insert(parts, extractText(cls.fninfo))
+        else
+            table.insert(parts, "(not found)")
+        end
+
+        -- Kalau ada unknown scroller, append juga
+        for i, sf in ipairs(cls.unknown) do
+            table.insert(parts, "")
+            table.insert(parts, "========== EXTRA #" .. i .. " ==========")
+            table.insert(parts, extractText(sf))
+        end
+
+        return table.concat(parts, "\n"), nil
     end
 
-    local function copyToClipboard(text, label)
-        if not setclipboard then
-            warn("[VANZ-COPY] No setclipboard")
+    -- ========================================================
+    -- CLICK HANDLER
+    -- ========================================================
+    local function onCopyClick()
+        status.Text = "Extracting..."
+        status.TextColor3 = Color3.fromRGB(255, 220, 100)
+        dbg("=== CLICK ===")
+
+        local text, err = buildFullText()
+        if not text then
+            status.Text = "❌ " .. (err or "?")
+            status.TextColor3 = Color3.fromRGB(255, 100, 100)
+            warn("[VANZ-COPY] " .. tostring(err))
             return
         end
-        local ok = pcall(setclipboard, text)
-        if ok then
-            print(string.format("[VANZ-COPY] %s copied (%d chars)", label, #text))
-            pcall(function()
-                if wax.shared.Sonner then
-                    wax.shared.Sonner.success(label .. " (" .. #text .. " chars)")
-                end
-            end)
-        else
-            warn("[VANZ-COPY] Copy failed")
+
+        dbg("Built text:", #text, "chars")
+
+        if not setclipboard then
+            status.Text = "❌ no setclipboard"
+            status.TextColor3 = Color3.fromRGB(255, 100, 100)
+            return
         end
-    end
 
-    local copyOptions = {
-        {
-            Text = "Copy All (Args + Code + Info)",
-            Icon = "clipboard-check",
-            Callback = function()
-                copyToClipboard(buildAllText(), "Copy All")
-            end,
-        },
-        {
-            Text = "Copy Arguments Only",
-            Icon = "clipboard-list",
-            Callback = function()
-                local e = extractFromUI()
-                copyToClipboard(table.concat(e.args, "\n"), "Arguments")
-            end,
-        },
-        {
-            Text = "Copy Code Only",
-            Icon = "code",
-            Callback = function()
-                local e = extractFromUI()
-                copyToClipboard(e.code, "Code")
-            end,
-        },
-        {
-            Text = "Copy Function Info Only",
-            Icon = "info",
-            Callback = function()
-                local e = extractFromUI()
-                copyToClipboard(e.fninfo, "Function Info")
-            end,
-        },
-    }
-
-    -- ========================================================
-    -- CREATE BUTTON
-    -- ========================================================
-    local createdBtn = nil
-
-    if wax.shared.CreateInfoDropdownButton then
-        local ok, btn = pcall(wax.shared.CreateInfoDropdownButton, "clipboard-copy", "Copy All", copyOptions)
-        if ok and btn then
-            createdBtn = btn
-            print("[VANZ-COPY] Button created via wax.shared API")
+        local ok2 = pcall(setclipboard, text)
+        if ok2 then
+            status.Text = "✓ Copied " .. #text .. " chars"
+            status.TextColor3 = Color3.fromRGB(100, 255, 150)
+            print("[VANZ-COPY] Copied " .. #text .. " chars")
         else
-            warn("[VANZ-COPY] API call failed: " .. tostring(btn))
+            status.Text = "❌ copy failed"
+            status.TextColor3 = Color3.fromRGB(255, 100, 100)
         end
-    else
-        warn("[VANZ-COPY] wax.shared.CreateInfoDropdownButton not exposed")
-    end
 
-    -- Fallback: manual button
-    if not createdBtn then
-        print("[VANZ-COPY] Using fallback button")
-        local btn = Instance.new("TextButton")
-        btn.Name = "VANZCopyAll"
-        btn.AutomaticSize = Enum.AutomaticSize.X
-        btn.BackgroundColor3 = Color3.fromRGB(25, 25, 30)
-        btn.BackgroundTransparency = 0.1
-        btn.Size = UDim2.fromScale(0, 1)
-        btn.Text = "Copy All"
-        btn.TextColor3 = Color3.new(1, 1, 1)
-        btn.TextSize = 14
-        btn.Font = Enum.Font.GothamBold
-        btn.Parent = InfoButtons
-
-        local corner = Instance.new("UICorner")
-        corner.CornerRadius = UDim.new(0, 6)
-        corner.Parent = btn
-
-        local stroke = Instance.new("UIStroke")
-        stroke.Color = Color3.fromRGB(70, 70, 90)
-        stroke.Thickness = 1
-        stroke.Parent = btn
-
-        local pad = Instance.new("UIPadding")
-        pad.PaddingLeft = UDim.new(0, 12)
-        pad.PaddingRight = UDim.new(0, 12)
-        pad.PaddingTop = UDim.new(0, 6)
-        pad.PaddingBottom = UDim.new(0, 6)
-        pad.Parent = btn
-
-        btn.MouseButton1Click:Connect(function()
-            copyToClipboard(buildAllText(), "Copy All")
-        end)
-
-        createdBtn = btn
-    end
-
-    -- ========================================================
-    -- PERSISTENCE — Re-add when footer updates
-    -- ========================================================
-    local PluginManager = wax.shared.CobaltPluginManager
-    if PluginManager and PluginManager.UI and PluginManager.UI.RemoteInfo then
-        local oldUpdate = PluginManager.UI.RemoteInfo.UpdateFooterButtons
-        if type(oldUpdate) == "function" then
-            PluginManager.UI.RemoteInfo.UpdateFooterButtons = function(...)
-                local results = { pcall(oldUpdate, ...) }
-                -- Re-add our button after update
-                task.defer(function()
-                    if createdBtn and not createdBtn.Parent then
-                        createdBtn.Parent = InfoButtons
-                    elseif createdBtn and createdBtn.Parent ~= InfoButtons then
-                        createdBtn.Parent = InfoButtons
-                    end
-                end)
-                return table.unpack(results, 2)
+        task.delay(4, function()
+            if status.Parent then
+                status.Text = "Ready"
+                status.TextColor3 = Color3.fromRGB(220, 220, 240)
             end
-            print("[VANZ-COPY] UpdateFooterButtons hooked for persistence")
-        end
+        end)
     end
 
+    btn.MouseButton1Click:Connect(function()
+        if moved then return end
+        onCopyClick()
+    end)
+
+    UIS.InputBegan:Connect(function(input, gp)
+        if gp then return end
+        if input.KeyCode == Enum.KeyCode.F9 then
+            onCopyClick()
+        end
+    end)
+
     print("=============================================")
-    print(" VANZ COPY-ALL INJECTED")
+    print(" VANZ FLOATING COPY-ALL v2 LOADED")
     print("=============================================")
-    print(" Buka event di Cobalt → klik 'Copy All' di footer")
-    print(" Pilih 'Copy All (Args + Code + Info)'")
+    print(" Button: tengah atas layar (draggable)")
+    print(" Hotkey: F9")
+    print(" 1. Buka event di Cobalt (modal muncul)")
+    print(" 2. Klik COPY ALL (atau F9)")
+    print(" 3. Cek output console [VANZ-COPY]")
     print("=============================================")
 end
