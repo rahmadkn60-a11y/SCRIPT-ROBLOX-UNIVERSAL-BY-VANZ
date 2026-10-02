@@ -1,0 +1,1818 @@
+--========================================================--
+-- VANZ — MOD MENU v13-ULTRA (Violence District Edition)
+-- HITSCAN/BEAM ONLY — gravity & drop dihapus total
+-- Fokus: prediksi gerak + akurasi + timing
+-- Drop-in replace v12/v11/v10
+--========================================================--
+
+_G.vanz = _G.vanz or {}
+_G.vanz.Settings = _G.vanz.Settings or {}
+_G.vanz.Events   = _G.vanz.Events   or {}
+_G.vanz.Runtime  = _G.vanz.Runtime  or {}
+
+--========================================================--
+-- 0_CONFIG v13 (parameter maxed, no gravity)
+--========================================================--
+_G.vanz.TeamCfg = _G.vanz.TeamCfg or {
+    enemyKeywords = { "kill","murder","slasher","hunter","monster","enemy","raider" },
+    allyKeywords  = { "survivor","innocent","runner","civilian","player","ally" },
+    enemyR = 0.55, allyB = 0.55,
+}
+
+_G.vanz.AimCfg = _G.vanz.AimCfg or {
+    originMode       = "gun",       -- "gun" | "head" | "hrp"
+    targetMode       = "head",      -- head-first default
+    bonePriority     = { "Head","UpperTorso","LowerTorso","HumanoidRootPart","Torso" },
+
+    leadPrediction   = true,
+    bulletSpeed      = 220,
+    bulletSpeedAuto  = true,
+
+    -- v13 CEILING
+    leadIterations   = 128,         -- 96 → 128
+    refineIterations = 64,          -- 32 → 64
+    maxPredictT      = 1.20,        -- 0.90 → 1.20
+    minPredictT      = 0.02,
+
+    -- PING (adaptive trend)
+    pingLeadEnabled  = true,
+    pingLeadScale    = 1.0,
+    cachedPing       = 0.05,
+    pingRollbackBuf  = 0.035,
+    pingSpikeGate    = 0.140,
+    pingTrendEnabled = true,
+    pingTrendEMA     = 0.0,
+    pingTrendScale   = 0.45,        -- 0.35 → 0.45
+    pingTrendClamp   = 0.055,
+
+    -- KINEMATIK (2nd order + subframe)
+    accelPrediction  = true,
+    accelWeight      = 0.60,        -- 0.55 → 0.60
+    accelClamp       = 350,         -- 300 → 350
+    subframeInterp   = true,
+    subframeAlpha    = 0.88,
+    strafeComp       = true,
+    strafeScale      = 0.70,        -- 0.60 → 0.70
+    splineInterp     = true,
+    splinePoints     = 8,           -- 6 → 8 (Catmull-Rom 8pt)
+    splineWeight     = 0.35,
+
+    -- ANGULAR (v13 enhanced)
+    angularComp      = true,
+    angularWeight    = 0.28,        -- 0.20 → 0.28
+    turnPredict      = true,        -- NEW v13: prediksi turning target
+    turnPredictScale = 0.35,        -- NEW v13
+
+    -- MOVEMENT CLASSIFIER (v13)
+    movementClassify = true,        -- NEW v13
+    sprintThreshold  = 22,          -- stud/s
+    walkThreshold    = 8,
+    classWeightRun   = 1.15,        -- bobot lead untuk running
+    classWeightSprint= 1.35,
+    classWeightWalk  = 0.85,
+    classWeightIdle  = 0.55,
+
+    -- STRAFE PATTERN (v13)
+    strafePatternDetect = true,     -- NEW v13
+    strafePatternWindow = 1.2,      -- detik
+    strafePatternConf   = 0.55,     -- 0.0-1.0
+
+    -- JUMP (masih relevan — target loncat = trajectory berubah)
+    jumpDetect       = true,
+    jumpPenalty      = 0.55,        -- lead Y dikurangi, bukan drop
+    jumpAirPred      = true,        -- NEW v13: prediksi posisi saat airborne
+
+    -- LOS / Wallbang
+    losCheck         = true,
+    losIgnoreSelf    = true,
+    wallbangCheck    = true,
+    wallbangSoftMats = { Enum.Material.Glass, Enum.Material.ForceField,
+                         Enum.Material.Plastic, Enum.Material.Fabric },
+    switchHysteresis = 0.25,
+    momentumWeight   = 0.45,
+    confidenceGate   = 0.40,        -- 0.45 → 0.40 (lebih agresif)
+    confidenceMaxDist = 2500,
+
+    -- PRIORITY LOCK
+    priorityLock     = true,
+    lockThreshold    = 2.8,
+    lockTimeout      = 2.5,
+
+    -- SCAN
+    maxScanDistance  = 3000,        -- 2500 → 3000
+    minFPSForMaxIter = 50,
+    minFPSForMidIter = 32,
+    minFPSForLowIter = 18,
+    autoCycleIter    = true,
+    emergencyIter    = 12,
+
+    -- THREAT SCORING (extended)
+    threatScoring    = true,
+    threatHPWeight   = 0.35,
+    threatDistWeight = 0.35,
+    threatAngWeight  = 0.25,
+    threatVelWeight  = 0.20,        -- NEW v13: target lari cepat = threat naik
+
+    -- BURST
+    burstFire        = true,
+    burstCount       = 5,
+    burstGap         = 0.030,       -- 0.035 → 0.030
+
+    -- AIM SMOOTHING (adaptive by distance)
+    aimSmoothing     = true,
+    smoothAlphaNear  = 0.90,        -- jarak < 30 stud: snap keras
+    smoothAlphaFar   = 0.55,        -- jarak > 200 stud: smooth
+    smoothDistSplit  = 30,          -- threshold "dekat"
+
+    -- KALMAN
+    kalmanFilter     = true,
+    kalmanQ          = 0.006,       -- 0.008 → 0.006
+    kalmanR          = 0.10,
+    kalmanAccelOn    = true,        -- NEW v13: kalman 2nd order
+
+    -- RECOIL PATTERN TRACKER (v13)
+    recoilComp       = true,        -- NEW v13
+    recoilWindow     = 0.5,
+    recoilLearnRate  = 0.25,
+    recoilScale      = 0.60,
+    recoilAutoZero   = true,        -- NEW v13: auto reset kalau idle > 1.5s
+
+    -- FIRE REMOTE FALLBACK
+    fireRemotePaths  = {
+        {"Remotes","Items","Twist of Fate","Fire"},
+        {"Remotes","Twist of Fate","Fire"},
+        {"Remotes","Items","Fire"},
+        {"Remotes","Combat","Fire"},
+    },
+
+    -- WHITELIST part target
+    hitPartBlacklist = { "Handle", "Accessory", "Tool", "Hat" },
+}
+
+--========================================================--
+-- 1_INIT_GUI v13
+--========================================================--
+do
+    local function handler(err)
+        warn(string.format("[VANZ ERROR][1_INIT_GUI] %s\n%s",
+            tostring(err), debug.traceback("", 2)))
+    end
+    xpcall(function()
+        local Players          = game:GetService("Players")
+        local UserInputService = game:GetService("UserInputService")
+        local LocalPlayer      = Players.LocalPlayer
+        local PlayerGui        = LocalPlayer:WaitForChild("PlayerGui")
+
+        local old = PlayerGui:FindFirstChild("VANZ_GUI")
+        if old then old:Destroy() end
+        _G.vanz.GUI = {}
+
+        local ScreenGui = Instance.new("ScreenGui")
+        ScreenGui.Name           = "VANZ_GUI"
+        ScreenGui.ResetOnSpawn   = false
+        ScreenGui.ZIndexBehavior = Enum.ZIndexBehavior.Sibling
+        ScreenGui.Parent         = PlayerGui
+        _G.vanz.GUI.ScreenGui = ScreenGui
+
+        local Main = Instance.new("Frame")
+        Main.AnchorPoint      = Vector2.new(0, 0.5)
+        Main.Position         = UDim2.new(0, 10, 0.5, 0)
+        Main.Size             = UDim2.new(0, 300, 0.92, 0)
+        Main.BackgroundColor3 = Color3.fromRGB(14, 14, 18)
+        Main.BorderSizePixel  = 0
+        Main.Parent           = ScreenGui
+        Instance.new("UICorner", Main).CornerRadius = UDim.new(0, 10)
+
+        local TitleBar = Instance.new("Frame")
+        TitleBar.Size             = UDim2.new(1, 0, 0, 45)
+        TitleBar.BackgroundColor3 = Color3.fromRGB(20, 20, 26)
+        TitleBar.BorderSizePixel  = 0
+        TitleBar.Parent           = Main
+        Instance.new("UICorner", TitleBar).CornerRadius = UDim.new(0, 10)
+
+        local Title = Instance.new("TextLabel")
+        Title.Size                   = UDim2.new(1, -55, 1, 0)
+        Title.Position               = UDim2.new(0, 15, 0, 0)
+        Title.BackgroundTransparency = 1
+        Title.Text                   = "VANZ  •  ULTRA v13"
+        Title.TextColor3             = Color3.fromRGB(255, 45, 45)
+        Title.TextSize               = 16
+        Title.Font                   = Enum.Font.GothamBold
+        Title.TextXAlignment         = Enum.TextXAlignment.Left
+        Title.Parent                 = TitleBar
+
+        local Minimize = Instance.new("TextButton")
+        Minimize.Size             = UDim2.new(0, 32, 0, 32)
+        Minimize.Position         = UDim2.new(1, -40, 0, 7)
+        Minimize.BackgroundColor3 = Color3.fromRGB(35, 35, 42)
+        Minimize.Text             = "–"
+        Minimize.TextColor3       = Color3.fromRGB(255, 255, 255)
+        Minimize.TextSize         = 20
+        Minimize.Font             = Enum.Font.GothamBold
+        Minimize.AutoButtonColor  = false
+        Minimize.Parent           = TitleBar
+        Instance.new("UICorner", Minimize).CornerRadius = UDim.new(0, 8)
+
+        local Content = Instance.new("ScrollingFrame")
+        Content.Position               = UDim2.new(0, 10, 0, 50)
+        Content.Size                   = UDim2.new(1, -20, 1, -60)
+        Content.BackgroundTransparency = 1
+        Content.BorderSizePixel        = 0
+        Content.ScrollBarThickness     = 3
+        Content.ScrollBarImageColor3   = Color3.fromRGB(70, 70, 80)
+        Content.CanvasSize             = UDim2.new(0, 0, 0, 0)
+        Content.AutomaticCanvasSize    = Enum.AutomaticSize.Y
+        Content.Parent                 = Main
+
+        local Layout = Instance.new("UIListLayout")
+        Layout.Padding   = UDim.new(0, 8)
+        Layout.SortOrder = Enum.SortOrder.LayoutOrder
+        Layout.Parent    = Content
+
+        local function CreateToggle(name, desc, key)
+            local Holder = Instance.new("Frame")
+            Holder.Size             = UDim2.new(1, 0, 0, 62)
+            Holder.BackgroundColor3 = Color3.fromRGB(22, 22, 28)
+            Holder.BorderSizePixel  = 0
+            Holder.Parent           = Content
+            Instance.new("UICorner", Holder).CornerRadius = UDim.new(0, 8)
+
+            local Label = Instance.new("TextLabel")
+            Label.Position               = UDim2.new(0, 12, 0, 6)
+            Label.Size                   = UDim2.new(1, -65, 0, 22)
+            Label.BackgroundTransparency = 1
+            Label.Text                   = name
+            Label.TextColor3             = Color3.fromRGB(245, 245, 245)
+            Label.TextSize               = 14
+            Label.Font                   = Enum.Font.GothamSemibold
+            Label.TextXAlignment         = Enum.TextXAlignment.Left
+            Label.Parent                 = Holder
+
+            local Desc = Instance.new("TextLabel")
+            Desc.Position               = UDim2.new(0, 12, 0, 28)
+            Desc.Size                   = UDim2.new(1, -65, 0, 26)
+            Desc.BackgroundTransparency = 1
+            Desc.Text                   = desc
+            Desc.TextColor3             = Color3.fromRGB(140, 140, 155)
+            Desc.TextSize               = 10
+            Desc.Font                   = Enum.Font.Gotham
+            Desc.TextXAlignment         = Enum.TextXAlignment.Left
+            Desc.TextWrapped            = true
+            Desc.Parent                 = Holder
+
+            local Toggle = Instance.new("TextButton")
+            Toggle.Size             = UDim2.new(0, 42, 0, 24)
+            Toggle.Position         = UDim2.new(1, -52, 0.5, -12)
+            Toggle.BackgroundColor3 = Color3.fromRGB(55, 55, 65)
+            Toggle.Text             = ""
+            Toggle.AutoButtonColor  = false
+            Toggle.Parent           = Holder
+            Instance.new("UICorner", Toggle).CornerRadius = UDim.new(1, 0)
+
+            local Knob = Instance.new("Frame")
+            Knob.Size             = UDim2.new(0, 18, 0, 18)
+            Knob.Position         = UDim2.new(0, 3, 0.5, -9)
+            Knob.BackgroundColor3 = Color3.fromRGB(225, 225, 225)
+            Knob.Parent           = Toggle
+            Instance.new("UICorner", Knob).CornerRadius = UDim.new(1, 0)
+
+            local function Update()
+                if _G.vanz.Settings[key] then
+                    Toggle.BackgroundColor3 = Color3.fromRGB(180, 40, 40)
+                    Knob.Position           = UDim2.new(1, -21, 0.5, -9)
+                else
+                    Toggle.BackgroundColor3 = Color3.fromRGB(55, 55, 65)
+                    Knob.Position           = UDim2.new(0, 3, 0.5, -9)
+                end
+            end
+
+            Toggle.MouseButton1Click:Connect(function()
+                _G.vanz.Settings[key] = not _G.vanz.Settings[key]
+                Update()
+                local ev = _G.vanz.Events[key]
+                if type(ev) == "function" then
+                    task.spawn(function()
+                        xpcall(function() ev(_G.vanz.Settings[key]) end,
+                            function(err)
+                                warn(string.format("[VANZ ERROR][%s] %s\n%s",
+                                    key, tostring(err), debug.traceback("", 2)))
+                            end)
+                    end)
+                end
+            end)
+
+            _G.vanz.Settings[key] = _G.vanz.Settings[key] or false
+            Update()
+        end
+
+        local defaults = {
+            VisualLine=true, FireButton=true, LeadPredict=true,
+            AntiKnock=true, AntiDeath=true, AutoHeal=true,
+            PingLead=true, PingTrend=true, AccelPredict=true,
+            Subframe=true, StrafeComp=true,
+            LOSCheck=true, WallbangCheck=true,
+            SplineInterp=true, ThreatScoring=true, BurstFire=true,
+            AngularComp=true, TurnPredict=true,
+            MovementClassify=true, StrafePatternDetect=true,
+            JumpDetect=true, JumpAirPred=true,
+            PriorityLock=true, AimSmoothing=true,
+            KalmanFilter=true, RecoilComp=true,
+        }
+        for k, v in pairs(defaults) do
+            if _G.vanz.Settings[k] == nil then _G.vanz.Settings[k] = v end
+        end
+
+        CreateToggle("Visual Line",         "Garis + prediksi + conf warna",        "VisualLine")
+        CreateToggle("Fire Button",         "Tombol FIRE silent aim",               "FireButton")
+        CreateToggle("Lead Prediction",     "Auto velocity prediction",             "LeadPredict")
+        CreateToggle("Ping Lead",           "Adjust lead pakai ping",               "PingLead")
+        CreateToggle("Ping Trend",          "Prediksi drift ping",                  "PingTrend")
+        CreateToggle("Accel Predict",       "Prediksi orde-2 (v+a)",                "AccelPredict")
+        CreateToggle("Subframe Interp",     "Prediksi sub-frame pakai ping",        "Subframe")
+        CreateToggle("Spline Interp",       "Catmull-Rom 8-pt interpolation",       "SplineInterp")
+        CreateToggle("Strafe Comp",         "Kompensasi lateral strafe",            "StrafeComp")
+        CreateToggle("Strafe Pattern",      "Deteksi pola strafe musuh",            "StrafePatternDetect")
+        CreateToggle("Angular Comp",        "Kompensasi rotasi target",             "AngularComp")
+        CreateToggle("Turn Predict",        "Prediksi target yang lagi belok",      "TurnPredict")
+        CreateToggle("Movement Classify",   "Klasifikasi walk/run/sprint",          "MovementClassify")
+        CreateToggle("Jump Detect",         "Deteksi target loncat",                "JumpDetect")
+        CreateToggle("Jump Air Predict",    "Prediksi posisi saat airborne",        "JumpAirPred")
+        CreateToggle("LOS Check",           "Raycast LOS sebelum fire",             "LOSCheck")
+        CreateToggle("Wallbang Check",      "Blokir fire kalau dinding ngehalang",  "WallbangCheck")
+        CreateToggle("Threat Scoring",      "Prioritas target pakai skor ancaman",  "ThreatScoring")
+        CreateToggle("Priority Lock",       "Kunci target, gak gampang switch",     "PriorityLock")
+        CreateToggle("Kalman Filter",       "Filter velocity Kalman 2nd order",     "KalmanFilter")
+        CreateToggle("Aim Smoothing",       "Adaptive smooth by distance",          "AimSmoothing")
+        CreateToggle("Recoil Comp",         "Auto-kompensasi recoil pattern",       "RecoilComp")
+        CreateToggle("Burst Fire",          "Auto fire 5x gap 30ms",                "BurstFire")
+        CreateToggle("Anti-Knock",          "HP drop → paksa collision balik",      "AntiKnock")
+        CreateToggle("Anti-Death",          "Auto HealEvent saat HP kritis",        "AntiDeath")
+        CreateToggle("Auto Heal",           "Auto heal di bawah 90% HP",            "AutoHeal")
+
+        _G.vanz.FireTof = _G.vanz.FireTof or function()
+            warn("[VANZ] FireTof belum siap.")
+        end
+
+        local FireBtn = Instance.new("TextButton")
+        FireBtn.Name                   = "VANZ_FireBtn"
+        FireBtn.AnchorPoint            = Vector2.new(1, 0.5)
+        FireBtn.Position               = UDim2.new(1, -20, 0.5, 0)
+        FireBtn.Size                   = UDim2.new(0, 78, 0, 78)
+        FireBtn.BackgroundColor3       = Color3.fromRGB(180, 30, 30)
+        FireBtn.BackgroundTransparency = 0.15
+        FireBtn.Text                   = "FIRE"
+        FireBtn.TextColor3             = Color3.fromRGB(255, 255, 255)
+        FireBtn.TextSize               = 16
+        FireBtn.Font                   = Enum.Font.GothamBold
+        FireBtn.AutoButtonColor        = true
+        FireBtn.Visible                = false
+        FireBtn.Parent                 = ScreenGui
+        Instance.new("UICorner", FireBtn).CornerRadius = UDim.new(1, 0)
+        local fstroke = Instance.new("UIStroke")
+        fstroke.Color = Color3.fromRGB(255, 80, 80); fstroke.Thickness = 2
+        fstroke.Parent = FireBtn
+
+        FireBtn.MouseButton1Click:Connect(function()
+            task.spawn(function()
+                xpcall(function() _G.vanz.FireTof() end,
+                    function(err)
+                        warn(string.format("[VANZ ERROR][FireButton] %s\n%s",
+                            tostring(err), debug.traceback("", 2)))
+                    end)
+            end)
+        end)
+        _G.vanz.Runtime.FireButton = FireBtn
+
+        local Logo = Instance.new("TextButton")
+        Logo.Size             = UDim2.new(0, 52, 0, 52)
+        Logo.Position         = UDim2.new(0, 10, 0.5, -26)
+        Logo.BackgroundColor3 = Color3.fromRGB(14, 14, 18)
+        Logo.Text             = "V"
+        Logo.TextColor3       = Color3.fromRGB(255, 55, 55)
+        Logo.TextSize         = 22
+        Logo.Font             = Enum.Font.GothamBold
+        Logo.AutoButtonColor  = false
+        Logo.Visible          = false
+        Logo.Parent           = ScreenGui
+        Instance.new("UICorner", Logo).CornerRadius = UDim.new(1, 0)
+        local stroke = Instance.new("UIStroke")
+        stroke.Color = Color3.fromRGB(255, 55, 55); stroke.Thickness = 2
+        stroke.Parent = Logo
+        _G.vanz.GUI.Logo = Logo
+
+        Minimize.MouseButton1Click:Connect(function()
+            Main.Visible = false; Logo.Visible = true
+        end)
+        Logo.MouseButton1Click:Connect(function()
+            Logo.Visible = false; Main.Visible = true
+        end)
+
+        local function MakeDraggable(object)
+            local dragging, dragStart, startPos, dragInput
+            object.InputBegan:Connect(function(input)
+                if input.UserInputType == Enum.UserInputType.MouseButton1
+                or input.UserInputType == Enum.UserInputType.Touch then
+                    dragging = true; dragStart = input.Position; startPos = object.Position
+                    input.Changed:Connect(function()
+                        if input.UserInputState == Enum.UserInputState.End then
+                            dragging = false
+                        end
+                    end)
+                end
+            end)
+            object.InputChanged:Connect(function(input)
+                if input.UserInputType == Enum.UserInputType.MouseMovement
+                or input.UserInputType == Enum.UserInputType.Touch then
+                    dragInput = input
+                end
+            end)
+            UserInputService.InputChanged:Connect(function(input)
+                if dragging and input == dragInput then
+                    local delta = input.Position - dragStart
+                    object.Position = UDim2.new(
+                        startPos.X.Scale, startPos.X.Offset + delta.X,
+                        startPos.Y.Scale, startPos.Y.Offset + delta.Y)
+                end
+            end)
+        end
+        MakeDraggable(Main); MakeDraggable(Logo)
+
+        local function Resize()
+            local cam = workspace.CurrentCamera
+            if not cam then return end
+            local vp = cam.ViewportSize
+            Main.Size = UDim2.new(0, math.min(300, vp.X - 20), 0.92, 0)
+        end
+        Resize()
+        local function HookCam(cam)
+            if not cam then return end
+            cam:GetPropertyChangedSignal("ViewportSize"):Connect(Resize)
+        end
+        HookCam(workspace.CurrentCamera)
+        workspace:GetPropertyChangedSignal("CurrentCamera"):Connect(function()
+            task.defer(function() HookCam(workspace.CurrentCamera); Resize() end)
+        end)
+
+        _G.vanz.Events.PingLead        = function(en) _G.vanz.AimCfg.pingLeadEnabled     = en end
+        _G.vanz.Events.PingTrend       = function(en) _G.vanz.AimCfg.pingTrendEnabled    = en end
+        _G.vanz.Events.AccelPredict    = function(en) _G.vanz.AimCfg.accelPrediction     = en end
+        _G.vanz.Events.Subframe        = function(en) _G.vanz.AimCfg.subframeInterp      = en end
+        _G.vanz.Events.SplineInterp    = function(en) _G.vanz.AimCfg.splineInterp        = en end
+        _G.vanz.Events.StrafeComp      = function(en) _G.vanz.AimCfg.strafeComp          = en end
+        _G.vanz.Events.StrafePatternDetect = function(en) _G.vanz.AimCfg.strafePatternDetect = en end
+        _G.vanz.Events.AngularComp     = function(en) _G.vanz.AimCfg.angularComp         = en end
+        _G.vanz.Events.TurnPredict     = function(en) _G.vanz.AimCfg.turnPredict         = en end
+        _G.vanz.Events.MovementClassify= function(en) _G.vanz.AimCfg.movementClassify    = en end
+        _G.vanz.Events.JumpDetect      = function(en) _G.vanz.AimCfg.jumpDetect          = en end
+        _G.vanz.Events.JumpAirPred     = function(en) _G.vanz.AimCfg.jumpAirPred         = en end
+        _G.vanz.Events.LOSCheck        = function(en) _G.vanz.AimCfg.losCheck            = en end
+        _G.vanz.Events.WallbangCheck   = function(en) _G.vanz.AimCfg.wallbangCheck       = en end
+        _G.vanz.Events.ThreatScoring   = function(en) _G.vanz.AimCfg.threatScoring       = en end
+        _G.vanz.Events.PriorityLock    = function(en) _G.vanz.AimCfg.priorityLock        = en end
+        _G.vanz.Events.KalmanFilter    = function(en) _G.vanz.AimCfg.kalmanFilter        = en end
+        _G.vanz.Events.AimSmoothing    = function(en) _G.vanz.AimCfg.aimSmoothing        = en end
+        _G.vanz.Events.RecoilComp      = function(en) _G.vanz.AimCfg.recoilComp          = en end
+        _G.vanz.Events.BurstFire       = function(en) _G.vanz.AimCfg.burstFire           = en end
+    end, handler)
+end
+
+--========================================================--
+-- 2_FPS_MONITOR v13
+--========================================================--
+do
+    xpcall(function()
+        local RunService  = game:GetService("RunService")
+        local Players     = game:GetService("Players")
+        local LocalPlayer = Players.LocalPlayer
+
+        _G.vanz.Runtime.SmoothFPS     = 60
+        _G.vanz.Runtime.FrameTimeAcc  = 0
+        _G.vanz.Runtime.FrameCount    = 0
+        _G.vanz.Runtime.LastFPSSample = tick()
+        _G.vanz.Runtime.PingJitterEMA = 0
+        _G.vanz.Runtime.PingSpike     = false
+        _G.vanz.Runtime.LastPing      = 0.05
+
+        RunService.Heartbeat:Connect(function(dt)
+            local now = tick()
+            _G.vanz.Runtime.FrameTimeAcc = _G.vanz.Runtime.FrameTimeAcc + dt
+            _G.vanz.Runtime.FrameCount   = _G.vanz.Runtime.FrameCount + 1
+
+            if now - _G.vanz.Runtime.LastFPSSample >= 0.10 then
+                local avgDt = _G.vanz.Runtime.FrameTimeAcc / math.max(_G.vanz.Runtime.FrameCount, 1)
+                local fps = 1 / math.max(avgDt, 0.001)
+                _G.vanz.Runtime.SmoothFPS = _G.vanz.Runtime.SmoothFPS * 0.94 + fps * 0.06
+                _G.vanz.Runtime.FrameTimeAcc = 0
+                _G.vanz.Runtime.FrameCount   = 0
+                _G.vanz.Runtime.LastFPSSample = now
+
+                pcall(function()
+                    local ping = LocalPlayer:GetNetworkPing()
+                    if typeof(ping) == "number" and ping > 0 then
+                        local cfg = _G.vanz.AimCfg
+                        local prev = cfg.cachedPing or 0.05
+                        cfg.cachedPing = prev * 0.82 + ping * 0.18
+                        local delta = ping - (_G.vanz.Runtime.LastPing or ping)
+                        cfg.pingTrendEMA = (cfg.pingTrendEMA or 0) * 0.78 + delta * 0.22
+                        _G.vanz.Runtime.LastPing = ping
+                        local jitter = math.abs(ping - prev)
+                        _G.vanz.Runtime.PingJitterEMA =
+                            _G.vanz.Runtime.PingJitterEMA * 0.70 + jitter * 0.30
+                        _G.vanz.Runtime.PingSpike =
+                            ping > (cfg.pingSpikeGate or 0.140)
+                    end
+                end)
+            end
+        end)
+
+        print("[VANZ] FPS monitor v13 READY.")
+    end, function(err)
+        warn(string.format("[VANZ ERROR][2_FPS_MONITOR] %s\n%s",
+            tostring(err), debug.traceback("", 2)))
+    end)
+end
+
+--========================================================--
+-- 3_TARGET_SCAN v13 (threat + vel weight)
+--========================================================--
+do
+    xpcall(function()
+        local Players     = game:GetService("Players")
+        local RunService  = game:GetService("RunService")
+        local LocalPlayer = Players.LocalPlayer
+
+        local function Classify(plr)
+            if not plr or plr == LocalPlayer then return "self" end
+            local team = plr.Team
+            if not team then return "unknown" end
+            local cfg  = _G.vanz.TeamCfg
+            local name = string.lower(team.Name or "")
+            for _, kw in ipairs(cfg.enemyKeywords) do
+                if string.find(name, kw, 1, true) then return "enemy" end
+            end
+            for _, kw in ipairs(cfg.allyKeywords) do
+                if string.find(name, kw, 1, true) then return "ally" end
+            end
+            local tc = team.TeamColor
+            local c  = tc and tc.Color
+            if c then
+                if c.R >= cfg.enemyR and c.G < 0.45 and c.B < 0.45 then return "enemy" end
+                if c.B >= cfg.allyB then return "ally" end
+            end
+            return "unknown"
+        end
+
+        local function GetRoot(plr)
+            local char = plr and plr.Character
+            if not char then return nil end
+            return char:FindFirstChild("UpperTorso")
+                or char:FindFirstChild("HumanoidRootPart")
+                or char:FindFirstChild("Torso")
+        end
+
+        _G.vanz.Runtime.LastSwitch = 0
+        _G.vanz.Runtime.Confidence = 0
+        _G.vanz.Runtime.TrackAge   = {}
+        _G.vanz.Runtime.ThreatMap  = {}
+        _G.vanz.Runtime.LockUntil  = 0
+
+        if _G.vanz.Runtime.ScanConn then _G.vanz.Runtime.ScanConn:Disconnect() end
+
+        _G.vanz.Runtime.ScanConn = RunService.RenderStepped:Connect(function()
+            if not (_G.vanz.Settings.VisualLine or _G.vanz.Settings.FireButton) then return end
+
+            local myRoot = GetRoot(LocalPlayer)
+            if not myRoot then
+                _G.vanz.Runtime.Target = nil
+                _G.vanz.Runtime.Confidence = 0
+                return
+            end
+
+            local cam   = workspace.CurrentCamera
+            local myPos = myRoot.Position
+            local cfg   = _G.vanz.AimCfg
+            local maxD  = cfg.maxScanDistance or 3000
+            local bestScore, best = -math.huge, nil
+            local now   = tick()
+
+            for _, plr in ipairs(Players:GetPlayers()) do
+                if Classify(plr) == "enemy" then
+                    local root = GetRoot(plr)
+                    if root then
+                        local d = (root.Position - myPos).Magnitude
+                        if d <= maxD then
+                            local score = -(d / maxD)
+                            if cam then
+                                local sp = cam:WorldToViewportPoint(root.Position)
+                                if sp.Z > 0 then
+                                    local vp = cam.ViewportSize
+                                    local dx = sp.X - vp.X * 0.5
+                                    local dy = sp.Y - vp.Y * 0.5
+                                    local ang = math.sqrt(dx*dx + dy*dy)
+                                    local maxAng = math.sqrt(vp.X*vp.X + vp.Y*vp.Y) * 0.5
+                                    score = score + (1 - ang / maxAng) * 0.5
+                                else
+                                    score = score - 0.4
+                                end
+                            end
+
+                            if cfg.threatScoring then
+                                local hum = plr.Character
+                                    and plr.Character:FindFirstChildOfClass("Humanoid")
+                                local hpRatio = 1
+                                if hum and hum.MaxHealth > 0 then
+                                    hpRatio = hum.Health / hum.MaxHealth
+                                end
+                                local velScore = 0
+                                if _G.vanz.GetPlayerSpeed then
+                                    velScore = math.clamp(
+                                        _G.vanz.GetPlayerSpeed(plr) / 30, 0, 1)
+                                end
+                                score = score
+                                    + (1 - hpRatio) * (cfg.threatHPWeight or 0.35)
+                                    + (1 - d / maxD) * (cfg.threatDistWeight or 0.35)
+                                    + velScore * (cfg.threatVelWeight or 0.20)
+                                _G.vanz.Runtime.ThreatMap[plr] = 1 - hpRatio
+                            end
+
+                            local age = (_G.vanz.Runtime.TrackAge[plr] or 0)
+                            score = score + math.min(age, 2) * (cfg.momentumWeight or 0.45)
+
+                            if score > bestScore then
+                                bestScore, best = score, plr
+                            end
+                        end
+                    end
+                end
+            end
+
+            local prev = _G.vanz.Runtime.Target
+            if cfg.priorityLock and prev and now < (_G.vanz.Runtime.LockUntil or 0) then
+                local prevRoot = GetRoot(prev)
+                if prevRoot then
+                    local prevScore = -((prevRoot.Position - myPos).Magnitude / maxD)
+                    local age = (_G.vanz.Runtime.TrackAge[prev] or 0)
+                    prevScore = prevScore + math.min(age, 2) * (cfg.momentumWeight or 0.45)
+                    if bestScore < prevScore * (cfg.lockThreshold or 2.8) then
+                        best = prev
+                    else
+                        _G.vanz.Runtime.LockUntil = now + (cfg.lockTimeout or 2.5)
+                    end
+                end
+            end
+
+            local hs = cfg.switchHysteresis or 0.25
+            if prev and best and prev ~= best
+            and (now - (_G.vanz.Runtime.LastSwitch or 0)) < hs then
+                best = prev
+            elseif prev ~= best then
+                _G.vanz.Runtime.LastSwitch = now
+                _G.vanz.Runtime.LockUntil  = now + (cfg.lockTimeout or 2.5)
+            end
+
+            for plr in pairs(_G.vanz.Runtime.TrackAge) do
+                if plr ~= best then
+                    _G.vanz.Runtime.TrackAge[plr] = math.max(0,
+                        (_G.vanz.Runtime.TrackAge[plr] or 0) - 0.05)
+                end
+            end
+            if best then
+                _G.vanz.Runtime.TrackAge[best] = (_G.vanz.Runtime.TrackAge[best] or 0) + 0.02
+            end
+
+            _G.vanz.Runtime.Target = best
+
+            if best then
+                local root = GetRoot(best)
+                if root and cam then
+                    local d = (root.Position - myPos).Magnitude
+                    local distConf = math.clamp(1 - (d / maxD), 0, 1)
+                    local sp = cam:WorldToViewportPoint(root.Position)
+                    local angConf = 1
+                    if sp.Z > 0 then
+                        local vp = cam.ViewportSize
+                        local dx, dy = sp.X - vp.X * 0.5, sp.Y - vp.Y * 0.5
+                        local ang = math.sqrt(dx*dx + dy*dy)
+                        local maxAng = math.sqrt(vp.X*vp.X + vp.Y*vp.Y) * 0.5
+                        angConf = math.clamp(1 - ang / maxAng, 0, 1)
+                    end
+                    _G.vanz.Runtime.Confidence = distConf * 0.4 + angConf * 0.6
+                else
+                    _G.vanz.Runtime.Confidence = 0
+                end
+            else
+                _G.vanz.Runtime.Confidence = 0
+            end
+        end)
+
+        print("[VANZ] TargetScan v13 READY.")
+    end, function(err)
+        warn(string.format("[VANZ ERROR][3_TARGET_SCAN] %s\n%s",
+            tostring(err), debug.traceback("", 2)))
+    end)
+end
+
+--========================================================--
+-- 4_VELOCITY_TRACKER v13 (Kalman 2nd + movement class + strafe pattern)
+--========================================================--
+do
+    xpcall(function()
+        local Players    = game:GetService("Players")
+        local RunService = game:GetService("RunService")
+
+        _G.vanz.Runtime.VelTracker = _G.vanz.Runtime.VelTracker or {}
+
+        local SAMPLE_WINDOW = 0.004
+        local MAX_SAMPLES   = 500
+        local SMOOTH_ALPHA  = 0.95
+        local ACCEL_ALPHA   = 0.78
+        local JUMP_Y_THRESH = 14
+        local STATIC_EPS    = 0.010
+
+        local function GetRoot(plr)
+            local char = plr and plr.Character
+            if not char then return nil end
+            return char:FindFirstChild("HumanoidRootPart")
+                or char:FindFirstChild("UpperTorso")
+                or char:FindFirstChild("Torso")
+        end
+
+        -- Kalman 1D
+        local function KalmanStep(s, meas, dt, q, r)
+            local xPred = s.x + s.vx * dt
+            local pPred = s.p + q
+            local k = pPred / (pPred + r)
+            local xNew = xPred + k * (meas - xPred)
+            local vNew = s.vx + (xNew - s.x) / math.max(dt, 0.001) * 0.30
+            s.x = xNew
+            s.vx = vNew
+            s.p = (1 - k) * pPred
+            return s
+        end
+
+        local function ClassifyMovement(speed)
+            local cfg = _G.vanz.AimCfg
+            if speed >= (cfg.sprintThreshold or 22) then return "sprint" end
+            if speed >= (cfg.walkThreshold or 8)    then return "run" end
+            if speed >= 0.5                          then return "walk" end
+            return "idle"
+        end
+
+        -- Deteksi pola strafe (kiri-kanan berulang)
+        local function UpdateStrafePattern(tr, lateral, now)
+            tr.lateralHistory = tr.lateralHistory or {}
+            table.insert(tr.lateralHistory, { t = now, v = lateral })
+            local win = _G.vanz.AimCfg.strafePatternWindow or 1.2
+            while #tr.lateralHistory > 0
+                and (now - tr.lateralHistory[1].t) > win do
+                table.remove(tr.lateralHistory, 1)
+            end
+            if #tr.lateralHistory < 6 then
+                tr.strafeConfidence = 0
+                return
+            end
+            -- hitung jumlah sign-flip
+            local flips = 0
+            local prevSign = 0
+            for _, s in ipairs(tr.lateralHistory) do
+                local sgn = s.v > 0.5 and 1 or (s.v < -0.5 and -1 or 0)
+                if sgn ~= 0 then
+                    if prevSign ~= 0 and sgn ~= prevSign then flips = flips + 1 end
+                    prevSign = sgn
+                end
+            end
+            local conf = math.clamp(flips / math.max(#tr.lateralHistory - 1, 1), 0, 1)
+            tr.strafeConfidence = conf
+            tr.strafeLastSign   = prevSign
+        end
+
+        local function Sample(plr, maxDist, myPos)
+            local root = GetRoot(plr)
+            if not root then return end
+
+            if maxDist and myPos then
+                local d = (root.Position - myPos).Magnitude
+                if d > maxDist then
+                    _G.vanz.Runtime.VelTracker[plr] = nil
+                    return
+                end
+            end
+
+            local now  = tick()
+            local pos  = root.Position
+            local vel  = root.AssemblyLinearVelocity or root.Velocity or Vector3.zero
+            local cfr  = root.CFrame
+            local look = cfr and cfr.LookVector or Vector3.zero
+
+            local tr = _G.vanz.Runtime.VelTracker[plr]
+            if not tr then
+                tr = {
+                    samples        = {},
+                    smoothVel      = Vector3.zero,
+                    smoothAccel    = Vector3.zero,
+                    kalmanX        = { x = pos.X, vx = 0, p = 0.5 },
+                    kalmanY        = { x = pos.Y, vx = 0, p = 0.5 },
+                    kalmanZ        = { x = pos.Z, vx = 0, p = 0.5 },
+                    lastLook       = look,
+                    angularVel     = Vector3.zero,
+                    lastSpeed      = 0,
+                    lastPos        = pos,
+                    lastVel        = vel,
+                    lastSampleT    = now,
+                    unchangedCount = 0,
+                    isJumping      = false,
+                    jumpUntil      = 0,
+                    moveClass      = "idle",
+                    strafeConfidence = 0,
+                    strafeLastSign = 0,
+                }
+                _G.vanz.Runtime.VelTracker[plr] = tr
+            end
+
+            if (pos - tr.lastPos).Magnitude < STATIC_EPS then
+                tr.unchangedCount = tr.unchangedCount + 1
+                if tr.unchangedCount > 5 then
+                    tr.smoothVel   = Vector3.zero
+                    tr.smoothAccel = Vector3.zero
+                    tr.lastSpeed   = 0
+                    tr.lastPos     = pos
+                    tr.lastSampleT = now
+                    tr.moveClass   = "idle"
+                    return
+                end
+            else
+                tr.unchangedCount = 0
+            end
+            tr.lastPos = pos
+
+            local dt = now - tr.lastSampleT
+            if dt > 0.001 then
+                local instAccel = (vel - tr.lastVel) / dt
+                local clamp = _G.vanz.AimCfg.accelClamp or 350
+                if instAccel.Magnitude > clamp then
+                    instAccel = instAccel.Unit * clamp
+                end
+                tr.smoothAccel = tr.smoothAccel:Lerp(instAccel, ACCEL_ALPHA)
+
+                if look.Magnitude > 0.01 and tr.lastLook.Magnitude > 0.01 then
+                    local dLook = look - tr.lastLook
+                    local instAng = dLook / dt
+                    tr.angularVel = tr.angularVel:Lerp(instAng, 0.72)
+                end
+            end
+            tr.lastVel     = vel
+            tr.lastLook    = look
+            tr.lastSampleT = now
+
+            if _G.vanz.AimCfg.kalmanFilter then
+                local q = _G.vanz.AimCfg.kalmanQ or 0.006
+                local r = _G.vanz.AimCfg.kalmanR or 0.10
+                KalmanStep(tr.kalmanX, pos.X, dt, q, r)
+                KalmanStep(tr.kalmanY, pos.Y, dt, q, r)
+                KalmanStep(tr.kalmanZ, pos.Z, dt, q, r)
+            end
+
+            if _G.vanz.AimCfg.jumpDetect and vel.Y > JUMP_Y_THRESH then
+                tr.isJumping = true
+                tr.jumpUntil = now + 1.0
+            elseif tr.jumpUntil and now > tr.jumpUntil then
+                tr.isJumping = false
+            end
+
+            table.insert(tr.samples, { t = now, pos = pos })
+            while #tr.samples > MAX_SAMPLES do
+                table.remove(tr.samples, 1)
+            end
+            while #tr.samples > 2
+            and (now - tr.samples[1].t) > SAMPLE_WINDOW do
+                table.remove(tr.samples, 1)
+            end
+
+            if #tr.samples >= 2 then
+                local oldest = tr.samples[1]
+                local newest = tr.samples[#tr.samples]
+                local wdt = newest.t - oldest.t
+                if wdt > 0.001 then
+                    local instVel = (newest.pos - oldest.pos) / wdt
+                    tr.smoothVel = tr.smoothVel:Lerp(instVel, SMOOTH_ALPHA)
+                    tr.lastSpeed = tr.smoothVel.Magnitude
+                    tr.moveClass = ClassifyMovement(tr.lastSpeed)
+                end
+            end
+
+            -- lateral strafe detect (perpendicular ke arah kamera)
+            if _G.vanz.AimCfg.strafePatternDetect and tr.smoothVel.Magnitude > 1 then
+                local cam = workspace.CurrentCamera
+                if cam then
+                    local cf = cam.CFrame
+                    local fwd = Vector3.new(cf.LookVector.X, 0, cf.LookVector.Z)
+                    if fwd.Magnitude > 0.1 then
+                        fwd = fwd.Unit
+                        local right = Vector3.new(-fwd.Z, 0, fwd.X)
+                        local lat = tr.smoothVel:Dot(right)
+                        UpdateStrafePattern(tr, lat, now)
+                    end
+                end
+            end
+        end
+
+        if _G.vanz.Runtime.VelConn then _G.vanz.Runtime.VelConn:Disconnect() end
+
+        _G.vanz.Runtime.VelConn = RunService.RenderStepped:Connect(function()
+            if not (_G.vanz.Settings.VisualLine
+                 or _G.vanz.Settings.FireButton
+                 or _G.vanz.Settings.LeadPredict) then return end
+            local lp = Players.LocalPlayer
+            local myChar = lp.Character
+            local myRoot = myChar and myChar:FindFirstChild("HumanoidRootPart")
+            local myPos  = myRoot and myRoot.Position
+            local maxDist = _G.vanz.AimCfg.maxScanDistance or 3000
+            for _, plr in ipairs(Players:GetPlayers()) do
+                if plr ~= lp then Sample(plr, maxDist, myPos) end
+            end
+        end)
+
+        _G.vanz.SampleNow = function(plr)
+            if not plr then return end
+            local lp = Players.LocalPlayer
+            local myRoot = lp.Character and lp.Character:FindFirstChild("HumanoidRootPart")
+            local myPos = myRoot and myRoot.Position
+            Sample(plr, nil, myPos)
+        end
+
+        _G.vanz.GetPlayerVelocity = function(plr)
+            if not plr then return Vector3.zero end
+            local tr = _G.vanz.Runtime.VelTracker[plr]
+            if not tr then return Vector3.zero end
+            if _G.vanz.AimCfg.kalmanFilter then
+                return Vector3.new(tr.kalmanX.vx, tr.kalmanY.vx, tr.kalmanZ.vx)
+            end
+            return tr.smoothVel or Vector3.zero
+        end
+
+        _G.vanz.GetPlayerAccel = function(plr)
+            if not plr then return Vector3.zero end
+            local tr = _G.vanz.Runtime.VelTracker[plr]
+            return tr and tr.smoothAccel or Vector3.zero
+        end
+
+        _G.vanz.GetAngularVel = function(plr)
+            if not plr then return Vector3.zero end
+            local tr = _G.vanz.Runtime.VelTracker[plr]
+            return tr and tr.angularVel or Vector3.zero
+        end
+
+        _G.vanz.GetMoveClass = function(plr)
+            local tr = _G.vanz.Runtime.VelTracker[plr]
+            return tr and tr.moveClass or "idle"
+        end
+
+        _G.vanz.GetStrafeConfidence = function(plr)
+            local tr = _G.vanz.Runtime.VelTracker[plr]
+            return tr and tr.strafeConfidence or 0
+        end
+
+        _G.vanz.GetStrafeSign = function(plr)
+            local tr = _G.vanz.Runtime.VelTracker[plr]
+            return tr and tr.strafeLastSign or 0
+        end
+
+        _G.vanz.IsPlayerJumping = function(plr)
+            local tr = _G.vanz.Runtime.VelTracker[plr]
+            return tr and tr.isJumping or false
+        end
+
+        _G.vanz.GetPlayerSpeed = function(plr)
+            return _G.vanz.GetPlayerVelocity(plr).Magnitude
+        end
+
+        print(string.format(
+            "[VANZ] VelTracker v13: window=%.4fs samples=%d kalman2=on class=on strafe=on",
+            SAMPLE_WINDOW, MAX_SAMPLES))
+    end, function(err)
+        warn(string.format("[VANZ ERROR][4_VELOCITY_TRACKER] %s\n%s",
+            tostring(err), debug.traceback("", 2)))
+    end)
+end
+
+--========================================================--
+-- 5_BULLET_CALIB v13
+--========================================================--
+do
+    xpcall(function()
+        local RS = game:GetService("ReplicatedStorage")
+        _G.vanz.Runtime.BulletSpeedBySkin = _G.vanz.Runtime.BulletSpeedBySkin or {}
+
+        local paths = _G.vanz.AimCfg.fireRemotePaths or {}
+        local vb
+        for _, path in ipairs(paths) do
+            local cur = RS
+            local ok = true
+            for _, seg in ipairs(path) do
+                cur = cur:FindFirstChild(seg)
+                if not cur then ok = false; break end
+            end
+            if ok and cur then
+                local ok2, found = pcall(function()
+                    local items = RS.Remotes:FindFirstChild("Items")
+                    return items and items:FindFirstChild("Twist of Fate")
+                        and items["Twist of Fate"]:FindFirstChild("VisualizeBullet")
+                end)
+                if ok2 and found then vb = found; break end
+            end
+        end
+
+        if not vb then
+            local items = RS:FindFirstChild("Remotes")
+                and RS.Remotes:FindFirstChild("Items")
+            if items then
+                local tof = items:FindFirstChild("Twist of Fate")
+                if tof then
+                    vb = tof:FindFirstChild("VisualizeBullet")
+                end
+            end
+        end
+
+        if not vb then
+            warn("[VANZ] VisualizeBullet gak ketemu, fallback speed 220.")
+            return
+        end
+
+        vb.OnClientEvent:Connect(function(_, _, speed, skin)
+            if typeof(speed) == "number" and speed > 0 then
+                local key = tostring(skin or "default")
+                _G.vanz.Runtime.BulletSpeedBySkin[key] = speed
+                if _G.vanz.AimCfg.bulletSpeedAuto ~= false then
+                    _G.vanz.AimCfg.bulletSpeed = speed
+                end
+            end
+        end)
+
+        print("[VANZ] BulletCalib v13 READY.")
+    end, function(err)
+        warn(string.format("[VANZ ERROR][5_BULLET_CALIB] %s\n%s",
+            tostring(err), debug.traceback("", 2)))
+    end)
+end
+
+--========================================================--
+-- 6_FIRETOF v13 — pure prediction (no gravity)
+--========================================================--
+do
+    xpcall(function()
+        local Players     = game:GetService("Players")
+        local LocalPlayer = Players.LocalPlayer
+        local RS          = game:GetService("ReplicatedStorage")
+        local cfg         = _G.vanz.AimCfg
+
+        local function GetGunPart()
+            local char = LocalPlayer.Character
+            if not char then return nil end
+            local tof = char:FindFirstChild("Twist of Fate")
+            if tof then
+                local rightArm = tof:FindFirstChild("Right Arm")
+                if rightArm then
+                    local g = rightArm:FindFirstChild("gun")
+                        or rightArm:FindFirstChildWhichIsA("BasePart", true)
+                    if g then return g end
+                end
+            end
+            -- fallback: cari part bernama "gun" di seluruh character
+            for _, d in ipairs(char:GetDescendants()) do
+                if d:IsA("BasePart") and d.Name:lower():find("gun") then return d end
+            end
+            return nil
+        end
+
+        local function GetAimOrigin()
+            local char = LocalPlayer.Character
+            if not char then return nil end
+            local mode = cfg.originMode or "gun"
+            if mode == "gun" then
+                local gun = GetGunPart()
+                if gun then return gun.Position end
+            end
+            if mode == "head" then
+                local head = char:FindFirstChild("Head")
+                if head and head:IsA("BasePart") then return head.Position end
+            end
+            local hrp = char:FindFirstChild("HumanoidRootPart")
+                or char:FindFirstChild("UpperTorso")
+                or char:FindFirstChild("Torso")
+            return hrp and hrp.Position or nil
+        end
+
+        local function GetTargetPart()
+            local tgt = _G.vanz.Runtime.Target
+            if not tgt then return nil end
+            local char = tgt.Character
+            if not char then return nil end
+            local priority = cfg.bonePriority
+                or { "Head","UpperTorso","LowerTorso","HumanoidRootPart","Torso" }
+            for _, name in ipairs(priority) do
+                local p = char:FindFirstChild(name)
+                if p and p:IsA("BasePart") then return p end
+            end
+            return nil
+        end
+
+        local function GetBulletSpeed()
+            local s = cfg.bulletSpeed
+            if typeof(s) == "number" and s > 0 then return s end
+            return 220
+        end
+
+        local function GetEffectiveIterations()
+            local base   = cfg.leadIterations or 128
+            local minHi  = cfg.minFPSForMaxIter or 50
+            local minMid = cfg.minFPSForMidIter or 32
+            local minLo  = cfg.minFPSForLowIter or 18
+            local emerg  = cfg.emergencyIter or 12
+            local fps    = _G.vanz.Runtime.SmoothFPS or 60
+            if not cfg.autoCycleIter then return base end
+            if fps >= minHi  then return base                end
+            if fps >= minMid then return math.min(base, 64)  end
+            if fps >= minLo  then return math.min(base, 24)  end
+            return emerg
+        end
+
+        local function GetTargetVelAccel(plr, part)
+            if _G.vanz.SampleNow and plr then _G.vanz.SampleNow(plr) end
+            local directVel = Vector3.zero
+            if part then
+                local ok, av = pcall(function() return part.AssemblyLinearVelocity end)
+                if ok and av then directVel = av end
+                if directVel.Magnitude < 0.05 then
+                    local ok2, v2 = pcall(function() return part.Velocity end)
+                    if ok2 and v2 then directVel = v2 end
+                end
+            end
+            local tv = _G.vanz.GetPlayerVelocity and _G.vanz.GetPlayerVelocity(plr)
+                or Vector3.zero
+            local ta = _G.vanz.GetPlayerAccel and _G.vanz.GetPlayerAccel(plr)
+                or Vector3.zero
+            local dm, tm = directVel.Magnitude, tv.Magnitude
+            local fused
+            if dm > tm * 1.5 then fused = directVel
+            elseif tm > dm * 1.5 then fused = tv
+            else fused = (directVel + tv) * 0.5 end
+            return fused, ta
+        end
+
+        local function HasLineOfSight(origin, targetPos)
+            if not cfg.losCheck then return true end
+            local params = RaycastParams.new()
+            params.FilterType = Enum.RaycastFilterType.Exclude
+            params.IgnoreWater = true
+            local filter = {}
+            if cfg.losIgnoreSelf and LocalPlayer.Character then
+                table.insert(filter, LocalPlayer.Character)
+            end
+            if _G.vanz.Runtime.Target and _G.vanz.Runtime.Target.Character then
+                table.insert(filter, _G.vanz.Runtime.Target.Character)
+            end
+            params.FilterDescendantsInstances = filter
+            local hit = workspace:Raycast(origin, targetPos - origin, params)
+            return hit == nil
+        end
+
+        local function IsWallbangClear(origin, targetPos)
+            if not cfg.wallbangCheck then return true end
+            local params = RaycastParams.new()
+            params.FilterType = Enum.RaycastFilterType.Exclude
+            params.IgnoreWater = true
+            local filter = {}
+            if LocalPlayer.Character then table.insert(filter, LocalPlayer.Character) end
+            if _G.vanz.Runtime.Target and _G.vanz.Runtime.Target.Character then
+                table.insert(filter, _G.vanz.Runtime.Target.Character)
+            end
+            params.FilterDescendantsInstances = filter
+            local hit = workspace:Raycast(origin, targetPos - origin, params)
+            if not hit then return true end
+            local soft = cfg.wallbangSoftMats
+            if soft then
+                for _, m in ipairs(soft) do
+                    if hit.Material == m then return true end
+                end
+            end
+            return false
+        end
+
+        -- 8-point Catmull-Rom spline
+        local function SplineRefine(plr, part, t)
+            if not cfg.splineInterp then return part.Position end
+            local tr = _G.vanz.Runtime.VelTracker[plr]
+            if not tr or #tr.samples < 8 then return part.Position end
+            local n = #tr.samples
+            local p1 = tr.samples[n-4].pos
+            local p2 = tr.samples[n-3].pos
+            local p3 = tr.samples[n-2].pos
+            local p4 = tr.samples[n-1].pos
+            local p5 = tr.samples[n].pos
+            local dt = math.max(tr.samples[n].t - tr.samples[n-1].t, 0.001)
+            local u = math.clamp(t / math.max(dt, 0.001), 0, 1)
+            local function CR(a,b,c,d,u)
+                return 0.5 * ((2*b) + (-a+c)*u + (2*a-5*b+4*c-d)*u*u + (-a+3*b-3*c+d)*u*u*u)
+            end
+            -- 2 segmen CR: (p1..p4) lalu (p2..p5), blend
+            local s1 = Vector3.new(
+                CR(p1.X,p2.X,p3.X,p4.X,u),
+                CR(p1.Y,p2.Y,p3.Y,p4.Y,u),
+                CR(p1.Z,p2.Z,p3.Z,p4.Z,u))
+            local s2 = Vector3.new(
+                CR(p2.X,p3.X,p4.X,p5.X,u),
+                CR(p2.Y,p3.Y,p4.Y,p5.Y,u),
+                CR(p2.Z,p3.Z,p4.Z,p5.Z,u))
+            return s1:Lerp(s2, u)
+        end
+
+        local function PredictTargetPos(origin, rawTarget, velocity, accel,
+                                        isJumping, tgtPlr, tgtPart)
+            if not cfg.leadPrediction then
+                return rawTarget, 0, GetBulletSpeed()
+            end
+
+            local speed      = GetBulletSpeed()
+            local iterations = GetEffectiveIterations()
+
+            -- ping lead + trend
+            local pingBonus = cfg.pingLeadEnabled
+                and (cfg.cachedPing or 0) * (cfg.pingLeadScale or 1.0)
+                or 0
+            if cfg.pingTrendEnabled then
+                local trend = cfg.pingTrendEMA or 0
+                local tp = math.clamp(
+                    trend * (cfg.pingTrendScale or 0.45),
+                    -(cfg.pingTrendClamp or 0.055),
+                     (cfg.pingTrendClamp or 0.055))
+                pingBonus = pingBonus + math.max(tp, 0)
+            end
+            if _G.vanz.Runtime.PingSpike then
+                pingBonus = math.max(pingBonus - (cfg.pingRollbackBuf or 0.035), 0)
+            end
+
+            -- movement class weight
+            local moveClass = _G.vanz.GetMoveClass and _G.vanz.GetMoveClass(tgtPlr) or "idle"
+            local classW = 1.0
+            if cfg.movementClassify then
+                if moveClass == "sprint" then classW = cfg.classWeightSprint or 1.35
+                elseif moveClass == "run" then classW = cfg.classWeightRun or 1.15
+                elseif moveClass == "walk" then classW = cfg.classWeightWalk or 0.85
+                else classW = cfg.classWeightIdle or 0.55 end
+            end
+
+            -- strafe comp + pattern predict
+            local strafeVec = Vector3.zero
+            if cfg.strafeComp and velocity.Magnitude > 2 then
+                local toTarget = rawTarget - origin
+                local flat = Vector3.new(toTarget.X, 0, toTarget.Z)
+                if flat.Magnitude > 0.1 then
+                    local fwd = flat.Unit
+                    local right = Vector3.new(-fwd.Z, 0, fwd.X)
+                    local lateral = velocity:Dot(right)
+                    strafeVec = right * (lateral * (cfg.strafeScale or 0.70))
+                    -- strafe pattern: kalau target gerak kiri-kanan pola,
+                    -- boost prediksi ke arah kebalikan strafe terakhir
+                    if cfg.strafePatternDetect then
+                        local conf = _G.vanz.GetStrafeConfidence
+                            and _G.vanz.GetStrafeConfidence(tgtPlr) or 0
+                        local sign = _G.vanz.GetStrafeSign
+                            and _G.vanz.GetStrafeSign(tgtPlr) or 0
+                        if conf > (cfg.strafePatternConf or 0.55) and sign ~= 0 then
+                            strafeVec = strafeVec + right * (-sign) * 3.0 * conf
+                        end
+                    end
+                end
+            end
+
+            -- angular velocity
+            local angOffset = Vector3.zero
+            if cfg.angularComp and _G.vanz.GetAngularVel then
+                local av = _G.vanz.GetAngularVel(tgtPlr)
+                if av.Magnitude > 0.05 and tgtPart and tgtPlr.Character then
+                    local hrp = tgtPlr.Character:FindFirstChild("HumanoidRootPart")
+                    local r = tgtPart.Position
+                        - (hrp and hrp.Position or origin)
+                    angOffset = av:Cross(r) * (cfg.angularWeight or 0.28)
+                end
+            end
+
+            -- turn predict: kalau target belok cepat, ekstrapolasi arah hadap
+            if cfg.turnPredict and tgtPlr and tgtPlr.Character then
+                local hrp = tgtPlr.Character:FindFirstChild("HumanoidRootPart")
+                local av = _G.vanz.GetAngularVel and _G.vanz.GetAngularVel(tgtPlr)
+                if hrp and av and av.Magnitude > 1.5 then
+                    local fwd = hrp.CFrame.LookVector
+                    local turnDir = av.Unit
+                    angOffset = angOffset + turnDir
+                        * av.Magnitude * (cfg.turnPredictScale or 0.35)
+                end
+            end
+
+            local useAccel = cfg.accelPrediction and accel and accel.Magnitude > 0.5
+            local accelW   = cfg.accelWeight or 0.60
+            local maxT     = cfg.maxPredictT or 1.20
+            local minT     = cfg.minPredictT or 0.02
+            local predicted, flightTime = rawTarget, 0
+
+            -- MAIN ITERATION
+            for _ = 1, iterations do
+                local dist = (predicted - origin).Magnitude
+                flightTime = dist / math.max(speed, 1)
+                local t = math.clamp((flightTime + pingBonus) * classW, minT, maxT)
+                local lin = rawTarget + velocity * t
+                if useAccel then lin = lin + accel * (accelW * t * t) end
+                lin = lin + strafeVec * math.min(t, 0.4)
+                lin = lin + angOffset * math.min(t, 0.6)
+                predicted = lin
+            end
+
+            -- NEWTON-RAFINEMENT
+            local refineN = cfg.refineIterations or 64
+            for _ = 1, refineN do
+                local d = predicted - origin
+                local dist = d.Magnitude
+                if dist < 0.01 then break end
+                local tNew = dist / math.max(speed, 1)
+                local t = math.clamp((tNew + pingBonus) * classW, minT, maxT)
+                local lin = rawTarget + velocity * t
+                if useAccel then lin = lin + accel * (accelW * t * t) end
+                lin = lin + strafeVec * math.min(t, 0.4)
+                lin = lin + angOffset * math.min(t, 0.6)
+                predicted = predicted:Lerp(lin, 0.5)
+            end
+
+            -- SPLINE
+            if cfg.splineInterp and tgtPlr and tgtPart then
+                local spr = SplineRefine(tgtPlr, tgtPart,
+                    math.min((flightTime + pingBonus) * classW, maxT))
+                local w = cfg.splineWeight or 0.35
+                predicted = predicted:Lerp(spr, w)
+            end
+
+            -- JUMP AIR PREDICT
+            if cfg.jumpAirPred and isJumping then
+                -- saat airborne, kurangi lead horizontal karena gerak XZ lebih stabil
+                local w = cfg.jumpPenalty or 0.55
+                predicted = Vector3.new(
+                    rawTarget.X + (predicted.X - rawTarget.X) * w,
+                    predicted.Y,
+                    rawTarget.Z + (predicted.Z - rawTarget.Z) * w)
+            end
+
+            return predicted, flightTime, speed
+        end
+
+        local function GetTargetDir()
+            local origin = GetAimOrigin()
+            local part   = GetTargetPart()
+            local tgtPlr = _G.vanz.Runtime.Target
+            if not (origin and part) then return nil, nil end
+
+            local rawTarget = part.Position
+            local velocity, accel = GetTargetVelAccel(tgtPlr, part)
+            local isJumping = _G.vanz.IsPlayerJumping
+                and _G.vanz.IsPlayerJumping(tgtPlr) or false
+
+            if not HasLineOfSight(origin, rawTarget) then return nil, nil end
+            if not IsWallbangClear(origin, rawTarget) then return nil, nil end
+
+            local predicted, flightTime = PredictTargetPos(
+                origin, rawTarget, velocity, accel, isJumping, tgtPlr, part)
+
+            local diff = predicted - origin
+            if diff.Magnitude < 0.01 then return nil, nil end
+
+            local dir = diff.Unit
+            return dir, predicted, flightTime
+        end
+
+        local function GetFireRemote()
+            for _, path in ipairs(cfg.fireRemotePaths or {}) do
+                local cur = RS
+                local ok = true
+                for _, seg in ipairs(path) do
+                    cur = cur:FindFirstChild(seg)
+                    if not cur then ok = false; break end
+                end
+                if ok and cur and cur:IsA("RemoteEvent") then return cur end
+            end
+            return nil
+        end
+
+        -- Recoil pattern tracker
+        _G.vanz.Runtime.RecoilHistory = _G.vanz.Runtime.RecoilHistory or {}
+        _G.vanz.Runtime.LastShotT     = 0
+        _G.vanz.Runtime.LastDir       = nil
+
+        local function RecordShot(dir)
+            if not cfg.recoilComp then return end
+            local now = tick()
+            local delta = now - (_G.vanz.Runtime.LastShotT or 0)
+            if delta > 1.5 then
+                _G.vanz.Runtime.RecoilHistory = {}
+            end
+            _G.vanz.Runtime.LastShotT = now
+            table.insert(_G.vanz.Runtime.RecoilHistory, dir)
+            local win = 8
+            while #_G.vanz.Runtime.RecoilHistory > win do
+                table.remove(_G.vanz.Runtime.RecoilHistory, 1)
+            end
+        end
+
+        local function ApplyRecoilComp(dir)
+            if not cfg.recoilComp then return dir end
+            local hist = _G.vanz.Runtime.RecoilHistory
+            if #hist < 2 then return dir end
+            local drift = Vector3.zero
+            for i = 2, #hist do
+                drift = drift + (hist[i] - hist[i-1])
+            end
+            drift = drift / (#hist - 1)
+            return (dir - drift * (cfg.recoilScale or 0.60)).Unit
+        end
+
+        local _singleFire = function()
+            local gun  = GetGunPart()
+            local fire = GetFireRemote()
+            local dir, _ = GetTargetDir()
+
+            local conf = _G.vanz.Runtime.Confidence or 0
+            local gate = cfg.confidenceGate or 0.40
+            if conf < gate then return false end
+            if not (gun and fire and dir) then return false end
+
+            -- Adaptive smooth by distance
+            if cfg.aimSmoothing and _G.vanz.Runtime.LastDir then
+                local tgt = _G.vanz.Runtime.Target
+                local nearAlpha = cfg.smoothAlphaNear or 0.90
+                local farAlpha  = cfg.smoothAlphaFar  or 0.55
+                local split     = cfg.smoothDistSplit or 30
+                local alpha = farAlpha
+                if tgt and tgt.Character then
+                    local hrp = tgt.Character:FindFirstChild("HumanoidRootPart")
+                    local myChar = LocalPlayer.Character
+                    local myHrp = myChar and myChar:FindFirstChild("HumanoidRootPart")
+                    if hrp and myHrp then
+                        local d = (hrp.Position - myHrp.Position).Magnitude
+                        if d <= split then alpha = nearAlpha
+                        else
+                            local t = math.clamp((d - split) / 200, 0, 1)
+                            alpha = nearAlpha + (farAlpha - nearAlpha) * t
+                        end
+                    end
+                end
+                dir = _G.vanz.Runtime.LastDir:Lerp(dir, alpha)
+            end
+
+            dir = ApplyRecoilComp(dir)
+            _G.vanz.Runtime.LastDir = dir
+            RecordShot(dir)
+
+            local ok = pcall(function() fire:FireServer(gun, dir) end)
+            return ok
+        end
+
+        _G.vanz.FireTof = function()
+            if not cfg.burstFire then _singleFire(); return end
+            task.spawn(function()
+                for i = 1, (cfg.burstCount or 5) do
+                    _singleFire()
+                    if i < (cfg.burstCount or 5) then
+                        task.wait(cfg.burstGap or 0.030)
+                    end
+                end
+            end)
+        end
+
+        _G.vanz.Events.FireButton = function(en)
+            if _G.vanz.Runtime.FireButton then
+                _G.vanz.Runtime.FireButton.Visible = en
+            end
+        end
+        _G.vanz.Events.LeadPredict = function(en)
+            cfg.leadPrediction = en
+        end
+
+        print("[VANZ] FireTof v13 READY (128-iter / 64-refine / 8pt-spline / class+strafe+turn).")
+    end, function(err)
+        warn(string.format("[VANZ ERROR][6_FIRETOF] %s\n%s",
+            tostring(err), debug.traceback("", 2)))
+    end)
+end
+
+--========================================================--
+-- 7_ANTI_KNOCK v13
+--========================================================--
+do
+    xpcall(function()
+        local Players    = game:GetService("Players")
+        local RunService = game:GetService("RunService")
+        local LocalPlayer = Players.LocalPlayer
+        local RS = game:GetService("ReplicatedStorage")
+        local EnableCollision
+        pcall(function() EnableCollision = RS.Remotes.Collision.EnableCollision end)
+
+        if _G.vanz.Runtime.GuardConn then _G.vanz.Runtime.GuardConn:Disconnect() end
+
+        local lastFire, lastHealth = 0, nil
+        local INTERVAL = 0.85
+
+        _G.vanz.Runtime.GuardConn = RunService.Heartbeat:Connect(function()
+            if not _G.vanz.Settings.AntiKnock then return end
+            local char = LocalPlayer.Character
+            if not char then return end
+            local hum = char:FindFirstChildOfClass("Humanoid")
+            if not hum then return end
+            local now = tick()
+            local isKnocked = lastHealth and (lastHealth - hum.Health) >= 10
+            lastHealth = hum.Health
+            if (isKnocked or (now - lastFire >= INTERVAL)) and EnableCollision then
+                lastFire = now
+                pcall(function() EnableCollision:FireServer() end)
+            end
+        end)
+    end, function(err)
+        warn(string.format("[VANZ ERROR][7_ANTI_KNOCK] %s\n%s",
+            tostring(err), debug.traceback("", 2)))
+    end)
+end
+
+--========================================================--
+-- 8_ANTI_DEATH v13
+--========================================================--
+do
+    xpcall(function()
+        local Players    = game:GetService("Players")
+        local RunService = game:GetService("RunService")
+        local LocalPlayer = Players.LocalPlayer
+        local RS = game:GetService("ReplicatedStorage")
+        local HealEvent
+        pcall(function() HealEvent = RS.Remotes.Healing.HealEvent end)
+
+        if _G.vanz.Runtime.DeathConn then _G.vanz.Runtime.DeathConn:Disconnect() end
+
+        local lastSpam = 0
+        local SPAM_INTERVAL = 0.08
+        local THRESHOLD     = 55
+
+        _G.vanz.Runtime.DeathConn = RunService.Heartbeat:Connect(function()
+            if not _G.vanz.Settings.AntiDeath then return end
+            local char = LocalPlayer.Character
+            if not char then return end
+            local hum  = char:FindFirstChildOfClass("Humanoid")
+            local hrp  = char:FindFirstChild("HumanoidRootPart")
+            if not (hum and hrp) then return end
+            if hum.Health > 0 and hum.Health <= THRESHOLD then
+                local now = tick()
+                if now - lastSpam >= SPAM_INTERVAL then
+                    lastSpam = now
+                    if HealEvent then
+                        pcall(function() HealEvent:FireServer(hrp, true) end)
+                    end
+                end
+            end
+        end)
+    end, function(err)
+        warn(string.format("[VANZ ERROR][8_ANTI_DEATH] %s\n%s",
+            tostring(err), debug.traceback("", 2)))
+    end)
+end
+
+--========================================================--
+-- 9_AUTO_HEAL v13
+--========================================================--
+do
+    xpcall(function()
+        local Players    = game:GetService("Players")
+        local RunService = game:GetService("RunService")
+        local LocalPlayer = Players.LocalPlayer
+        local RS = game:GetService("ReplicatedStorage")
+        local HealEvent
+        pcall(function() HealEvent = RS.Remotes.Healing.HealEvent end)
+
+        if _G.vanz.Runtime.HealConn then _G.vanz.Runtime.HealConn:Disconnect() end
+
+        local last = 0
+        local INTERVAL = 0.15
+        local THRESHOLD = 0.92
+
+        _G.vanz.Runtime.HealConn = RunService.Heartbeat:Connect(function()
+            if not _G.vanz.Settings.AutoHeal then return end
+            local char = LocalPlayer.Character
+            if not char then return end
+            local hum = char:FindFirstChildOfClass("Humanoid")
+            local hrp = char:FindFirstChild("HumanoidRootPart")
+            if not (hum and hrp) then return end
+            if hum.Health > 0 and hum.Health < hum.MaxHealth * THRESHOLD then
+                local now = tick()
+                if now - last >= INTERVAL then
+                    last = now
+                    if HealEvent then
+                        pcall(function() HealEvent:FireServer(hrp, true) end)
+                    end
+                end
+            end
+        end)
+    end, function(err)
+        warn(string.format("[VANZ ERROR][9_AUTO_HEAL] %s\n%s",
+            tostring(err), debug.traceback("", 2)))
+    end)
+end
+
+--========================================================--
+-- 10_VISUAL_LINE v13
+--========================================================--
+do
+    xpcall(function()
+        local Players     = game:GetService("Players")
+        local RunService  = game:GetService("RunService")
+        local LocalPlayer = Players.LocalPlayer
+
+        if not (type(Drawing) == "table" and type(Drawing.new) == "function") then
+            warn("[VANZ] Drawing gak ada."); return
+        end
+
+        local line = Drawing.new("Line")
+        line.Visible = false; line.Color = Color3.fromRGB(255, 55, 55)
+        line.Thickness = 2; line.Transparency = 1
+        line.From = Vector2.new(0, 0); line.To = Vector2.new(0, 0)
+        _G.vanz.Runtime.DrawLine = line
+
+        local dot = Drawing.new("Circle")
+        dot.Visible = false; dot.Color = Color3.fromRGB(255, 55, 55)
+        dot.Thickness = 2; dot.Radius = 6; dot.Filled = false; dot.Transparency = 1
+        _G.vanz.Runtime.DrawDot = dot
+
+        local rawDot = Drawing.new("Circle")
+        rawDot.Visible = false; rawDot.Color = Color3.fromRGB(255, 200, 0)
+        rawDot.Thickness = 1; rawDot.Radius = 4; rawDot.Filled = false
+        rawDot.Transparency = 0.6
+        _G.vanz.Runtime.DrawRawDot = rawDot
+
+        local function Project(worldPos, cam)
+            local vp = cam.ViewportSize
+            local cx, cy = vp.X * 0.5, vp.Y * 0.5
+            local sp = cam:WorldToViewportPoint(worldPos)
+            if sp.Z > 0 then return Vector2.new(sp.X, sp.Y) end
+            local dx, dy = cx - sp.X, cy - sp.Y
+            local len = math.sqrt(dx*dx + dy*dy)
+            if len < 1 then return Vector2.new(cx, cy + 2000) end
+            local scale = 3000 / len
+            return Vector2.new(cx + dx*scale, cy + dy*scale)
+        end
+
+        local function GetGunPos()
+            local char = LocalPlayer.Character
+            if not char then return nil end
+            local tof = char:FindFirstChild("Twist of Fate")
+            if tof then
+                local ra = tof:FindFirstChild("Right Arm")
+                if ra then
+                    local m = ra:FindFirstChild("gun")
+                        or ra:FindFirstChildWhichIsA("BasePart", true)
+                    if m and m:IsA("BasePart") then return m.Position end
+                end
+            end
+            local hrp = char:FindFirstChild("HumanoidRootPart")
+            return hrp and (hrp.Position + Vector3.new(0,1,0)) or nil
+        end
+
+        if _G.vanz.Runtime.LineConn then _G.vanz.Runtime.LineConn:Disconnect() end
+
+        _G.vanz.Runtime.LineConn = RunService.RenderStepped:Connect(function()
+            if not _G.vanz.Settings.VisualLine then
+                line.Visible = false; dot.Visible = false; rawDot.Visible = false
+                return
+            end
+            local tgt = _G.vanz.Runtime.Target
+            if not tgt or not tgt.Character then
+                line.Visible = false; dot.Visible = false; rawDot.Visible = false
+                return
+            end
+            local part = tgt.Character:FindFirstChild("Head")
+                or tgt.Character:FindFirstChild("UpperTorso")
+                or tgt.Character:FindFirstChild("HumanoidRootPart")
+            if not (part and part:IsA("BasePart")) then
+                line.Visible = false; dot.Visible = false; rawDot.Visible = false
+                return
+            end
+            local gunPos = GetGunPos()
+            local cam = workspace.CurrentCamera
+            if not (gunPos and cam) then
+                line.Visible = false; dot.Visible = false; rawDot.Visible = false
+                return
+            end
+            line.From = Project(gunPos, cam)
+            line.To   = Project(part.Position, cam)
+            line.Visible = true
+            local conf = _G.vanz.Runtime.Confidence or 0
+            dot.Color = Color3.fromRGB(
+                math.floor(255 * (1 - conf)),
+                math.floor(255 * conf), 60)
+            dot.Position = Project(part.Position, cam)
+            dot.Visible = true
+            rawDot.Position = Project(part.Position, cam)
+            rawDot.Visible = _G.vanz.AimCfg.leadPrediction
+        end)
+
+        _G.vanz.Events.VisualLine = function(en)
+            if not en then
+                if _G.vanz.Runtime.DrawLine   then _G.vanz.Runtime.DrawLine.Visible   = false end
+                if _G.vanz.Runtime.DrawDot    then _G.vanz.Runtime.DrawDot.Visible    = false end
+                if _G.vanz.Runtime.DrawRawDot then _G.vanz.Runtime.DrawRawDot.Visible = false end
+            end
+        end
+    end, function(err)
+        warn(string.format("[VANZ ERROR][10_VISUAL_LINE] %s\n%s",
+            tostring(err), debug.traceback("", 2)))
+    end)
+end
+
+--========================================================--
+-- 11_HUD_INFO v13
+--========================================================--
+do
+    xpcall(function()
+        local RunService = game:GetService("RunService")
+        if not (_G.vanz.GUI and _G.vanz.GUI.ScreenGui) then return end
+
+        local Info = Instance.new("TextLabel")
+        Info.AnchorPoint          = Vector2.new(0, 1)
+        Info.Position             = UDim2.new(0, 10, 1, -10)
+        Info.Size                 = UDim2.new(0, 1180, 0, 22)
+        Info.BackgroundTransparency = 0.4
+        Info.BackgroundColor3     = Color3.fromRGB(14, 14, 18)
+        Info.TextColor3           = Color3.fromRGB(255, 100, 100)
+        Info.TextSize             = 10
+        Info.Font                 = Enum.Font.Gotham
+        Info.TextXAlignment       = Enum.TextXAlignment.Left
+        Info.Text                 = "VANZ ULTRA v13 • idle"
+        Info.Parent               = _G.vanz.GUI.ScreenGui
+        Instance.new("UICorner", Info).CornerRadius = UDim.new(0, 6)
+
+        RunService.Heartbeat:Connect(function()
+            local tgt  = _G.vanz.Runtime.Target
+            local name = tgt and tgt.Name or "—"
+            local cfg  = _G.vanz.AimCfg
+
+            local vel  = (_G.vanz.GetPlayerSpeed and tgt)
+                and _G.vanz.GetPlayerSpeed(tgt) or 0
+            local acc  = (_G.vanz.GetPlayerAccel and tgt)
+                and _G.vanz.GetPlayerAccel(tgt).Magnitude or 0
+            local jump = (_G.vanz.IsPlayerJumping and tgt)
+                and (_G.vanz.IsPlayerJumping(tgt) and "J" or "-") or "-"
+            local mclass = (_G.vanz.GetMoveClass and tgt)
+                and _G.vanz.GetMoveClass(tgt) or "—"
+            local strafe = (_G.vanz.GetStrafeConfidence and tgt)
+                and _G.vanz.GetStrafeConfidence(tgt) or 0
+
+            local bs = cfg.bulletSpeed
+            local bsStr = (typeof(bs) == "number" and bs > 0)
+                and string.format("%.0f", bs) or "nil"
+            local fps  = _G.vanz.Runtime.SmoothFPS or 60
+            local conf = _G.vanz.Runtime.Confidence or 0
+
+            local iter = cfg.leadIterations or 128
+            if fps < (cfg.minFPSForMaxIter or 50) then
+                if fps >= (cfg.minFPSForMidIter or 32) then iter = math.min(iter, 64)
+                elseif fps >= (cfg.minFPSForLowIter or 18) then iter = math.min(iter, 24)
+                else iter = cfg.emergencyIter or 12 end
+            end
+
+            local ping = (cfg.cachedPing or 0) * 1000
+            local jit  = (_G.vanz.Runtime.PingJitterEMA or 0) * 1000
+            local trend = (cfg.pingTrendEMA or 0) * 1000
+            local spike = _G.vanz.Runtime.PingSpike and "SPK" or "ok "
+            local flags = string.format(
+                "P%s A%s S%s AN%s TP%s MC%s SP%s JD%s JA%s L%s W%s TH%s LK%s KF%s SM%s RC%s B%d",
+                cfg.pingLeadEnabled and "+" or "-",
+                cfg.accelPrediction and "+" or "-",
+                cfg.strafeComp      and "+" or "-",
+                cfg.angularComp     and "+" or "-",
+                cfg.turnPredict     and "+" or "-",
+                cfg.movementClassify and "+" or "-",
+                cfg.splineInterp    and "+" or "-",
+                cfg.jumpDetect      and "+" or "-",
+                cfg.jumpAirPred     and "+" or "-",
+                cfg.losCheck        and "+" or "-",
+                cfg.wallbangCheck   and "+" or "-",
+                cfg.threatScoring   and "+" or "-",
+                cfg.priorityLock    and "+" or "-",
+                cfg.kalmanFilter    and "+" or "-",
+                cfg.aimSmoothing    and "+" or "-",
+                cfg.recoilComp      and "+" or "-",
+                cfg.burstCount or 5)
+
+            Info.Text = string.format(
+                "v13 • b=%s v=%.0f a=%.0f %s [%s] st=%.2f it=%d fps=%.0f p=%.0f±%.0f~%.0f[%s] c=%.2f | %s | tgt=%s",
+                bsStr, vel, acc, jump, mclass, strafe, iter, fps,
+                ping, jit, trend, spike, conf, flags, name)
+        end)
+    end, function(err)
+        warn(string.format("[VANZ ERROR][11_HUD_INFO] %s\n%s",
+            tostring(err), debug.traceback("", 2)))
+    end)
+end
+
+print("[VANZ] ===== v13-ULTRA FULLY LOADED (no gravity, hitscan mode) =====")
